@@ -7,33 +7,6 @@ use app_core::session::SessionManager;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
-// ── Sport option ──────────────────────────────────────────────────────────────
-
-#[derive(Clone, PartialEq)]
-struct SportOption {
-    label: &'static str,
-    emoji: &'static str,
-    value: Sport,
-}
-
-const SPORT_OPTIONS: &[SportOption] = &[
-    SportOption {
-        label: "Soccer",
-        emoji: "⚽",
-        value: Sport::Soccer,
-    },
-    SportOption {
-        label: "Basketball",
-        emoji: "🏀",
-        value: Sport::Basketball,
-    },
-    SportOption {
-        label: "Chess",
-        emoji: "♟",
-        value: Sport::Chess,
-    },
-];
-
 const TEAM_SIZES: &[u8] = &[1, 2, 3, 4, 5, 7, 11];
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -42,14 +15,13 @@ const TEAM_SIZES: &[u8] = &[1, 2, 3, 4, 5, 7, 11];
 pub fn SetupPage() -> impl IntoView {
     use_page_meta(
         "New Session · PCPlayerPicker",
-        "Configure sport, players, scheduling cadence, and field needs for a new session.",
+        "Configure players, scheduling cadence, and field needs for a new session.",
     );
 
     let ctx = use_context::<AppContext>().expect("AppContext missing");
     let navigate = use_navigate();
 
     // ── Form state ────────────────────────────────────────────────────────
-    let sport = RwSignal::new(Sport::Soccer);
     let team_size = RwSignal::new(2u8);
     let player_count = RwSignal::new(8u32);
     let sched_frequency = RwSignal::new(1u8); // reschedule every N rounds
@@ -112,7 +84,7 @@ pub fn SetupPage() -> impl IntoView {
             }
         };
 
-        let mut config = SessionConfig::new(ts, sched_frequency.get(), sport.get_untracked());
+        let mut config = SessionConfig::new(ts, sched_frequency.get(), Sport::Soccer);
         config.match_duration_minutes = duration;
 
         let mut manager = SessionManager::new(config);
@@ -146,40 +118,6 @@ pub fn SetupPage() -> impl IntoView {
             </div>
 
             <div class="px-4 pb-16 space-y-8 max-w-lg mx-auto">
-
-                // ── Sport ─────────────────────────────────────────────────
-                <section>
-                    <h2 class="section-label">"Sport"</h2>
-                    <div class="flex gap-3">
-                        {SPORT_OPTIONS.iter().map(|opt| {
-                            let val = opt.value.clone();
-                            let label = opt.label;
-                            let emoji = opt.emoji;
-                            view! {
-                                <button
-                                    class=move || {
-                                        let base = "flex-1 py-3 rounded-xl border font-medium \
-                                                    text-sm transition-colors min-h-[56px] \
-                                                    flex flex-col items-center gap-1";
-                                        if sport.get() == val {
-                                            format!("{base} bg-blue-600 border-blue-500 text-white")
-                                        } else {
-                                            format!("{base} bg-gray-900 border-gray-700 \
-                                                    text-gray-300 hover:border-gray-500")
-                                        }
-                                    }
-                                    on:click={
-                                        let val = opt.value.clone();
-                                        move |_| sport.set(val.clone())
-                                    }
-                                >
-                                    <span class="text-xl">{emoji}</span>
-                                    {label}
-                                </button>
-                            }
-                        }).collect_view()}
-                    </div>
-                </section>
 
                 // ── Team size ─────────────────────────────────────────────
                 <section>

@@ -177,7 +177,7 @@ pub fn TutorialPage() -> impl IntoView {
     let steps = [
         (
             "Create the session",
-            "Choose sport, team size, player count, scheduling frequency, and optional match duration. Player names can stay simple: numbers, initials, or jersey IDs all work.",
+            "Choose team size, player count, scheduling frequency, and optional match duration. Player names can stay simple: numbers, initials, or jersey IDs all work.",
         ),
         (
             "Add enough players for the format",

@@ -111,8 +111,12 @@ Include a test that the cloudflare bundle for the worker, compressed, is less th
 
 GitHub Actions CI/CD for Cloudflare: https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/ and https://github.com/cloudflare/wrangler-action
 
+### Remaining Items
+
 ### Remaining (not blocking launch)
-- wrangler.toml database_id is account-specific — document in README for anyone forking the project
+- wrangler.toml database_id is account-specific — document in README for anyone forking the project, also analytics id
 - Admin dashboard UI — /api/admin/sessions returns JSON; a visual dashboard is future work
 - Full SQLite/OPFS normalized query layer — app_core/db/queries.rs schema is ready; wiring it to a SQLite WASM runtime is future work (IDB + OPFS file backup covers the data-loss risk for now)
-- Low: dashboard.rs (~2300 LOC) and worker lib.rs (~1100 LOC) are large — refactor candidates for a future pass, not blocking launch
+- dashboard.rs (~2300 LOC) and worker lib.rs (~1100 LOC) are large — refactor candidates for a future pass
+- Score-entry UI is duplicated between coach and assistant pages. Compare client_app/src/pages/coach/dashboard.rs (line 545) and client_app/src/pages/assistant.rs (line 351). That duplication will keep drifting, and it already creates inconsistent capabilities like duration multiplier support only on the coach side.
+- Assistant links can submit arbitrary event types, not just scores. We are not really concerned with assistants hacking, so this probably fine for now.

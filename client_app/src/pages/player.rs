@@ -2,16 +2,50 @@
 //!
 //! Minimalist itinerary style: shows the player's upcoming matches for the current
 //! and next rounds. Read-only — players cannot enter scores.
+//!
+//! After loading the schedule the player selects their name from a list; the page
+//! then filters to only their matches. The selection is persisted in localStorage
+//! so it survives a refresh.
 
 use crate::meta::use_page_meta;
 use crate::sync::{auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, EventLog};
-use app_core::models::MatchStatus;
+use app_core::models::{MatchStatus, PlayerId, PlayerStatus};
 use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
 const POLL_INTERVAL_MS: u32 = 10_000;
+
+fn storage_key(token: &str) -> String {
+    format!("pcpp_player_{token}")
+}
+
+fn read_player_selection(token: &str) -> Option<PlayerId> {
+    let storage = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()?;
+    let raw = storage.get_item(&storage_key(token)).ok()??;
+    raw.parse::<u32>().ok().map(PlayerId)
+}
+
+fn write_player_selection(token: &str, id: PlayerId) {
+    if let Some(storage) = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+    {
+        let _ = storage.set_item(&storage_key(token), &id.0.to_string());
+    }
+}
+
+fn clear_player_selection(token: &str) {
+    if let Some(storage) = web_sys::window()
+        .and_then(|w| w.local_storage().ok())
+        .flatten()
+    {
+        let _ = storage.remove_item(&storage_key(token));
+    }
+}
 
 async fn pull_latest_into_log(
     session_id: &str,
@@ -63,6 +97,10 @@ pub fn PlayerPage() -> impl IntoView {
     let is_loading = RwSignal::new(true);
     let session_id = RwSignal::new(String::new());
 
+    // Player selection
+    let selected_player: RwSignal<Option<PlayerId>> = RwSignal::new(None);
+    let resolved_token = RwSignal::new(String::new());
+
     // PIN gate signals
     let requires_pin = RwSignal::new(false);
     let pin_input = RwSignal::new(String::new());
@@ -89,6 +127,11 @@ pub fn PlayerPage() -> impl IntoView {
             error_msg.set("This link is for players only.".to_string());
             is_loading.set(false);
             return;
+        }
+        resolved_token.set(tok.clone());
+        // Restore saved player selection before rendering
+        if let Some(pid) = read_player_selection(&tok) {
+            selected_player.set(Some(pid));
         }
         session_id.set(info.session_id.clone());
         match pull_latest_into_log(&info.session_id, log, error_msg, true).await {
@@ -201,6 +244,10 @@ pub fn PlayerPage() -> impl IntoView {
                                                             is_loading.set(false);
                                                             return;
                                                         }
+                                                        resolved_token.set(tok2.clone());
+                                                        if let Some(pid) = read_player_selection(&tok2) {
+                                                            selected_player.set(Some(pid));
+                                                        }
                                                         session_id.set(info.session_id.clone());
                                                         match pull_latest_into_log(&info.session_id, log, error_msg, true).await {
                                                             Ok(_) => {
@@ -244,79 +291,161 @@ pub fn PlayerPage() -> impl IntoView {
                     };
 
                     let state = materialize(&el);
-                    let round = state.current_round.0;
 
-                    // Show matches for current and next round
-                    let mut matches: Vec<_> = state.matches.values()
-                        .filter(|m| {
-                            (m.round.0 == round || m.round.0 == round + 1)
-                                && m.status != MatchStatus::Voided
-                        })
+                    // ── Player selector ───────────────────────────────────────────────
+                    // Collect active players sorted by name for the picker.
+                    let mut player_list: Vec<_> = state.players.values()
+                        .filter(|p| p.status == PlayerStatus::Active)
                         .collect();
-                    matches.sort_by(|a, b| a.round.0.cmp(&b.round.0).then(a.field.cmp(&b.field)));
+                    player_list.sort_by(|a, b| a.name.cmp(&b.name));
 
-                    if matches.is_empty() {
+                    // Validate persisted selection is still in this session.
+                    let selection = selected_player.get_untracked();
+                    let valid_selection = selection.filter(|pid| state.players.contains_key(pid));
+                    if valid_selection != selection {
+                        selected_player.set(valid_selection);
+                    }
+
+                    if valid_selection.is_none() {
+                        // Show the name picker.
+                        let tok_val = resolved_token.get_untracked();
                         return view! {
-                            <div class="text-center py-12 text-gray-400">
-                                <p class="text-4xl mb-3">"📋"</p>
-                                <p>"No matches scheduled yet."</p>
-                                <p class="text-sm mt-1">"Check back after the coach generates the schedule."</p>
+                            <div class="max-w-sm mx-auto py-8 space-y-4">
+                                <h2 class="text-lg font-bold text-center">"Who are you?"</h2>
+                                <p class="text-sm text-gray-400 text-center">
+                                    "Select your name to see only your matches."
+                                </p>
+                                <div class="space-y-2">
+                                    {player_list.into_iter().map(|p| {
+                                        let pid = p.id;
+                                        let name = p.name.clone();
+                                        let tok2 = tok_val.clone();
+                                        view! {
+                                            <button
+                                                class="w-full py-3 bg-gray-900 border border-gray-700 \
+                                                       hover:border-blue-500 hover:bg-gray-800 \
+                                                       text-white font-medium rounded-xl \
+                                                       transition-colors min-h-[52px]"
+                                                on:click=move |_| {
+                                                    write_player_selection(&tok2, pid);
+                                                    selected_player.set(Some(pid));
+                                                }
+                                            >
+                                                {name}
+                                            </button>
+                                        }
+                                    }).collect_view()}
+                                </div>
                             </div>
                         }.into_any();
                     }
 
+                    let selected_id = valid_selection.unwrap();
+                    let selected_name = state.players.get(&selected_id)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+
+                    let round = state.current_round.0;
+
+                    // Show only matches for the selected player in current and next round.
+                    let mut matches: Vec<_> = state.matches.values()
+                        .filter(|m| {
+                            (m.round.0 == round || m.round.0 == round + 1)
+                                && m.status != MatchStatus::Voided
+                                && (m.team_a.contains(&selected_id) || m.team_b.contains(&selected_id))
+                        })
+                        .collect();
+                    matches.sort_by(|a, b| a.round.0.cmp(&b.round.0).then(a.field.cmp(&b.field)));
+
+                    let tok_val = resolved_token.get_untracked();
+
                     view! {
                         <div class="space-y-3">
-                            {matches.into_iter().map(|m| {
-                                let team_a_names: Vec<_> = m.team_a.iter()
-                                    .filter_map(|id| state.players.get(id).map(|p| p.name.clone()))
-                                    .collect();
-                                let team_b_names: Vec<_> = m.team_b.iter()
-                                    .filter_map(|id| state.players.get(id).map(|p| p.name.clone()))
-                                    .collect();
-                                let field = m.field;
-                                let rnd = m.round.0;
-                                let status = m.status.clone();
+                            // "Not you?" link
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-sm text-gray-400">
+                                    "Showing schedule for "
+                                    <span class="text-white font-semibold">{selected_name}</span>
+                                </span>
+                                <button
+                                    class="text-xs text-blue-400 hover:text-blue-300 underline \
+                                           underline-offset-2 transition-colors"
+                                    on:click=move |_| {
+                                        clear_player_selection(&tok_val);
+                                        selected_player.set(None);
+                                    }
+                                >
+                                    "Not you?"
+                                </button>
+                            </div>
 
+                            {if matches.is_empty() {
                                 view! {
-                                    <div class="bg-gray-900 border border-gray-700/50 rounded-2xl p-5">
-                                        <div class="flex items-center justify-between mb-4">
-                                            <div>
-                                                <span class="text-xs font-semibold uppercase \
-                                                             tracking-widest text-gray-500">
-                                                    "Round "{rnd}
-                                                </span>
-                                                <span class="ml-3 text-xs text-gray-500">
-                                                    "Field "{field}
-                                                </span>
-                                            </div>
-                                            {match status {
-                                                MatchStatus::Completed =>
-                                                    view! { <span class="text-xs text-green-400 font-medium">"Done"</span> }.into_any(),
-                                                MatchStatus::InProgress =>
-                                                    view! { <span class="text-xs text-yellow-400 font-medium animate-pulse">"In Progress"</span> }.into_any(),
-                                                _ =>
-                                                    view! { <span class="text-xs text-blue-400 font-medium">"Upcoming"</span> }.into_any(),
-                                            }}
-                                        </div>
-                                        <div class="flex items-center gap-4">
-                                            <div class="flex-1 text-center">
-                                                {team_a_names.iter().map(|n| view! {
-                                                    <p class="font-semibold text-white">{n.clone()}</p>
-                                                }).collect_view()}
-                                            </div>
-                                            <div class="shrink-0 text-center">
-                                                <span class="text-gray-500 font-black text-sm">"VS"</span>
-                                            </div>
-                                            <div class="flex-1 text-center">
-                                                {team_b_names.iter().map(|n| view! {
-                                                    <p class="font-semibold text-white">{n.clone()}</p>
-                                                }).collect_view()}
-                                            </div>
-                                        </div>
+                                    <div class="text-center py-12 text-gray-400">
+                                        <p class="text-4xl mb-3">"📋"</p>
+                                        <p>"No upcoming matches."</p>
+                                        <p class="text-sm mt-1">"Check back after the coach generates the next round."</p>
                                     </div>
-                                }
-                            }).collect_view()}
+                                }.into_any()
+                            } else {
+                                matches.into_iter().map(|m| {
+                                    let team_a_names: Vec<_> = m.team_a.iter()
+                                        .filter_map(|id| state.players.get(id).map(|p| p.name.clone()))
+                                        .collect();
+                                    let team_b_names: Vec<_> = m.team_b.iter()
+                                        .filter_map(|id| state.players.get(id).map(|p| p.name.clone()))
+                                        .collect();
+                                    let on_team_a = m.team_a.contains(&selected_id);
+                                    let field = m.field;
+                                    let rnd = m.round.0;
+                                    let status = m.status.clone();
+
+                                    view! {
+                                        <div class="bg-gray-900 border border-gray-700/50 rounded-2xl p-5">
+                                            <div class="flex items-center justify-between mb-4">
+                                                <div>
+                                                    <span class="text-xs font-semibold uppercase \
+                                                                 tracking-widest text-gray-500">
+                                                        "Round "{rnd}
+                                                    </span>
+                                                    <span class="ml-3 text-xs text-gray-500">
+                                                        "Field "{field}
+                                                    </span>
+                                                </div>
+                                                {match status {
+                                                    MatchStatus::Completed =>
+                                                        view! { <span class="text-xs text-green-400 font-medium">"Done"</span> }.into_any(),
+                                                    MatchStatus::InProgress =>
+                                                        view! { <span class="text-xs text-yellow-400 font-medium animate-pulse">"In Progress"</span> }.into_any(),
+                                                    _ =>
+                                                        view! { <span class="text-xs text-blue-400 font-medium">"Upcoming"</span> }.into_any(),
+                                                }}
+                                            </div>
+                                            <div class="flex items-center gap-4">
+                                                <div class=move || format!(
+                                                    "flex-1 text-center {}",
+                                                    if on_team_a { "ring-1 ring-blue-500/40 rounded-lg py-1" } else { "" }
+                                                )>
+                                                    {team_a_names.iter().map(|n| view! {
+                                                        <p class="font-semibold text-white">{n.clone()}</p>
+                                                    }).collect_view()}
+                                                </div>
+                                                <div class="shrink-0 text-center">
+                                                    <span class="text-gray-500 font-black text-sm">"VS"</span>
+                                                </div>
+                                                <div class=move || format!(
+                                                    "flex-1 text-center {}",
+                                                    if !on_team_a { "ring-1 ring-blue-500/40 rounded-lg py-1" } else { "" }
+                                                )>
+                                                    {team_b_names.iter().map(|n| view! {
+                                                        <p class="font-semibold text-white">{n.clone()}</p>
+                                                    }).collect_view()}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                }).collect_view().into_any()
+                            }}
                         </div>
                     }.into_any()
                 }}
