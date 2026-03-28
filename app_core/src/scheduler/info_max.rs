@@ -1,8 +1,10 @@
 /// Information-maximizing scheduler.
 ///
 /// Selects matchups that are expected to reduce posterior ranking uncertainty
-/// the most. Uses the `expected_info_gain()` method on the ranking engine to
-/// evaluate candidate matchups, then greedily picks the highest-gain matches.
+/// the most. Evaluates candidate matchups with a greedy heuristic
+/// (sum of uncertainties minus half the skill gap) and picks the highest-gain
+/// matches. This mirrors `RankingEngine::expected_info_gain()` without
+/// requiring a reference to the engine at scheduling time.
 ///
 /// For multi-round batches, applies a receding-horizon approach: schedule the
 /// first round optimally, project forward with estimated uncertainty reduction,
@@ -127,8 +129,8 @@ impl InfoMaxScheduler {
     }
 
     /// Enumerate candidate matchups and return the one with highest info gain.
-    /// Uses the heuristic: sum(sigma) - 0.5 * |skill_gap|
-    /// Full entropy calculation deferred to Phase 2 when ranking engine is integrated.
+    /// Heuristic: sum(sigma) - 0.5 * |skill_gap|  (same formula as
+    /// `GoalModelEngine::expected_info_gain`).
     fn find_best_matchup(
         &self,
         available: &[usize],

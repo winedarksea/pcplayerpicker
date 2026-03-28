@@ -111,28 +111,8 @@ Include a test that the cloudflare bundle for the worker, compressed, is less th
 
 GitHub Actions CI/CD for Cloudflare: https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/ and https://github.com/cloudflare/wrangler-action
 
-### Issues Blocking Launch
-Medium: app_core::db is legacy/unwired (dead abstraction + dead schema constants).
-db/mod.rs (line 27), db/mod.rs (line 21), queries.rs (line 90), session.rs (line 5).
-No DataStore impl exists; docs still describe implementations that aren’t present.
-
-Medium: scheduling/ranking interface drift (expected_info_gain) looks unfinished.
-ranking/mod.rs (line 23), info_max.rs (line 4), info_max.rs (line 145).
-Trait says scheduler should use ranking engine info gain, but scheduler computes its own heuristic and never calls the trait method.
-
-Low: stale “stub / Phase X” comments remain in live modules.
-goal_model.rs (line 9), csv.rs (line 7), info_max.rs (line 131).
-These read as unfinished placeholders even though code is in production paths.
-
-Low: broad warning suppression hides real issues.
-lib.rs (line 1), lib.rs (line 1020), sync/mod.rs (line 80).
-#![allow(unused_must_use)] at crate root is too broad; clear_sync_state and UploadResponse.ok are explicitly suppressed dead code.
-
-Low: major refactor candidates due file size/complexity.
-dashboard.rs, lib.rs.
-dashboard.rs (~2300 LOC) and worker lib.rs (~1100 LOC) mix many responsibilities and repeat patterns (session mutate+save, coach-key validation, inline component state).
-
 ### Remaining (not blocking launch)
 - wrangler.toml database_id is account-specific — document in README for anyone forking the project
 - Admin dashboard UI — /api/admin/sessions returns JSON; a visual dashboard is future work
 - Full SQLite/OPFS normalized query layer — app_core/db/queries.rs schema is ready; wiring it to a SQLite WASM runtime is future work (IDB + OPFS file backup covers the data-loss risk for now)
+- Low: dashboard.rs (~2300 LOC) and worker lib.rs (~1100 LOC) are large — refactor candidates for a future pass, not blocking launch

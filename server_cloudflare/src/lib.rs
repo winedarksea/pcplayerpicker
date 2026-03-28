@@ -1,5 +1,3 @@
-#![allow(unused_must_use)]
-
 use app_core::events::EventEnvelope;
 use serde::{Deserialize, Serialize};
 
@@ -1027,66 +1025,73 @@ async fn handle_heartbeat_get(
 }
 
 // ── Scheduled cleanup ─────────────────────────────────────────────────────────
+// Isolated in a submodule so we can suppress the `unused_must_use` warning that
+// the `worker` proc-macro generates around `#[event(scheduled)]` without using
+// a crate-level `#![allow(…)]`.
 
-/// Cron-triggered cleanup. Runs on the schedule defined in wrangler.toml.
-///
-/// Responsibility split:
-///   Coach client  → writes `archived_sessions` whenever rankings are pushed.
-///   This handler  → deletes old raw event logs + very old archived summaries.
-///
-/// Raw events are safe to delete after ARCHIVE_AFTER_DAYS: the coach will have
-/// had ample opportunity to push an archive snapshot during an active session.
-/// Sessions that were never shared online have no archive, but that is acceptable
-/// because offline-only sessions store everything in localStorage on the coach
-/// device, which is not subject to D1 retention.
 #[allow(unused_must_use)]
-#[event(scheduled)]
-pub async fn cleanup(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) -> Result<()> {
-    let db = env.d1("DB")?;
+mod cleanup_job {
+    use super::*;
 
-    // Millisecond cutoffs
-    let now = js_sys::Date::now();
-    let raw_cutoff = now - ARCHIVE_AFTER_DAYS * 86_400_000.0;
-    let archive_cutoff = now - ARCHIVE_RETENTION_DAYS * 86_400_000.0;
+    /// Cron-triggered cleanup. Runs on the schedule defined in wrangler.toml.
+    ///
+    /// Responsibility split:
+    ///   Coach client  → writes `archived_sessions` whenever rankings are pushed.
+    ///   This handler  → deletes old raw event logs + very old archived summaries.
+    ///
+    /// Raw events are safe to delete after ARCHIVE_AFTER_DAYS: the coach will have
+    /// had ample opportunity to push an archive snapshot during an active session.
+    /// Sessions that were never shared online have no archive, but that is acceptable
+    /// because offline-only sessions store everything in localStorage on the coach
+    /// device, which is not subject to D1 retention.
+    #[event(scheduled)]
+    pub async fn cleanup(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) -> Result<()> {
+        let db = env.d1("DB")?;
 
-    // Delete raw events for sessions past the retention window
-    db.prepare(
-        "DELETE FROM events WHERE session_id IN \
-         (SELECT id FROM sessions WHERE created_at < ?1)",
-    )
-    .bind(&[raw_cutoff.into()])?
-    .run()
-    .await?;
+        // Millisecond cutoffs
+        let now = js_sys::Date::now();
+        let raw_cutoff = now - ARCHIVE_AFTER_DAYS * 86_400_000.0;
+        let archive_cutoff = now - ARCHIVE_RETENTION_DAYS * 86_400_000.0;
 
-    // Delete share tokens for those sessions
-    db.prepare(
-        "DELETE FROM share_tokens WHERE session_id IN \
-         (SELECT id FROM sessions WHERE created_at < ?1)",
-    )
-    .bind(&[raw_cutoff.into()])?
-    .run()
-    .await?;
-
-    // Delete the session rows themselves
-    db.prepare("DELETE FROM sessions WHERE created_at < ?1")
+        // Delete raw events for sessions past the retention window
+        db.prepare(
+            "DELETE FROM events WHERE session_id IN \
+             (SELECT id FROM sessions WHERE created_at < ?1)",
+        )
         .bind(&[raw_cutoff.into()])?
         .run()
         .await?;
 
-    // Prune old archived summaries
-    db.prepare("DELETE FROM archived_sessions WHERE created_at < ?1")
-        .bind(&[archive_cutoff.into()])?
+        // Delete share tokens for those sessions
+        db.prepare(
+            "DELETE FROM share_tokens WHERE session_id IN \
+             (SELECT id FROM sessions WHERE created_at < ?1)",
+        )
+        .bind(&[raw_cutoff.into()])?
         .run()
         .await?;
 
-    // Prune stale device heartbeats older than 24 hours
-    let heartbeat_cutoff = now - 86_400_000.0;
-    db.prepare("DELETE FROM device_heartbeats WHERE last_seen < ?1")
-        .bind(&[heartbeat_cutoff.into()])?
-        .run()
-        .await?;
+        // Delete the session rows themselves
+        db.prepare("DELETE FROM sessions WHERE created_at < ?1")
+            .bind(&[raw_cutoff.into()])?
+            .run()
+            .await?;
 
-    Ok(())
+        // Prune old archived summaries
+        db.prepare("DELETE FROM archived_sessions WHERE created_at < ?1")
+            .bind(&[archive_cutoff.into()])?
+            .run()
+            .await?;
+
+        // Prune stale device heartbeats older than 24 hours
+        let heartbeat_cutoff = now - 86_400_000.0;
+        db.prepare("DELETE FROM device_heartbeats WHERE last_seen < ?1")
+            .bind(&[heartbeat_cutoff.into()])?
+            .run()
+            .await?;
+
+        Ok(())
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

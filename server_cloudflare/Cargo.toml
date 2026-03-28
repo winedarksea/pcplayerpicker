@@ -7,11 +7,11 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
-# NOTE: app_core is imported with DEFAULT features only (no `ranking`, no `scheduling`).
+# NOTE: app_core uses `js` (uuid/getrandom WASM compat) but NOT `ranking` or `scheduling`.
 # This is critical: nalgebra and the ranking engine must NOT enter the Worker bundle.
 # All heavy computation runs client-side in the browser WASM.
 [dependencies]
-app_core = { path = "../app_core" }
+app_core = { path = "../app_core", features = ["js"] }
 
 # worker 0.7: "http" enables http-crate types; "d1" enables D1 database bindings (Phase 4)
 worker = { version = "0.7", features = ["http", "d1"] }

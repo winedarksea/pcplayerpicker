@@ -5,9 +5,6 @@
 //! team context (sum of teammate skills vs opponent skills). The posterior over
 //! all θ is approximated via warm-started Laplace (Newton-Raphson on the
 //! log-posterior), then used to derive rank distributions via Monte Carlo.
-//!
-//! Phase 2 will flesh out the full implementation. This stub establishes the
-//! module structure, types, and trait impl so Phase 0 compiles cleanly.
 
 use super::RankingEngine;
 use crate::models::{
@@ -395,7 +392,6 @@ impl RankingEngine for GoalModelEngine {
     ) -> f64 {
         // Greedy heuristic: sum of uncertainties of all players in the match,
         // weighted by closeness of expected skills between the two teams.
-        // Full entropy calculation deferred to Phase 2.
         let rating_map: std::collections::HashMap<PlayerId, &PlayerRanking> =
             current_ratings.iter().map(|r| (r.player_id, r)).collect();
 

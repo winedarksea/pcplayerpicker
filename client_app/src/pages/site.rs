@@ -304,6 +304,22 @@ pub fn FaqPage() -> impl IntoView {
                             <p class="mt-3 leading-7 text-slate-300">{answer}</p>
                         </div>
                     }).collect_view()}
+
+                    <div class="rounded-[24px] border border-white/10 bg-slate-900/60 p-6">
+                        <h2 class="text-xl font-bold text-white">"Where is the source code?"</h2>
+                        <p class="mt-3 leading-7 text-slate-300">
+                            "PCPlayerPicker is free and open-source. View the repository on "
+                            <a
+                                href="https://github.com/winedarksea/pcplayerpicker"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="font-semibold text-teal-200 underline decoration-teal-200/60 underline-offset-4 transition hover:text-teal-100"
+                            >
+                                "GitHub"
+                            </a>
+                            "."
+                        </p>
+                    </div>
                 </div>
             </section>
         </SiteShell>

@@ -17,13 +17,12 @@ pub enum DbError {
 
 pub type DbResult<T> = Result<T, DbError>;
 
-/// Storage abstraction. Two implementations:
-/// - `OpfsDataStore` in client_app (OPFS SQLite, browser-only)
-/// - `D1DataStore` in server_cloudflare (Cloudflare D1)
+/// Storage abstraction for future normalized query layer.
 ///
-/// Both use the same SQL schema from app_core/migrations/.
-/// The trait is deliberately synchronous at the interface level; each
-/// implementation wraps its own async runtime as needed.
+/// No implementations exist yet — the app currently uses an append-only
+/// event log (localStorage on the client, D1 on the worker). When an OPFS
+/// SQLite runtime is wired up, `queries.rs` provides the schema and this
+/// trait defines the interface each backend must satisfy.
 pub trait DataStore {
     fn create_session(&self, config: &SessionConfig) -> DbResult<()>;
     fn get_session(&self, id: &SessionId) -> DbResult<Option<SessionState>>;
