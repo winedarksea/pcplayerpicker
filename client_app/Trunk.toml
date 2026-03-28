@@ -2,7 +2,7 @@
 target = "index.html"
 dist = "dist"
 # Minify HTML in release builds
-minify = false  # enabled per-profile below
+minify = "none"
 
 [watch]
 ignore = ["dist", "target"]
