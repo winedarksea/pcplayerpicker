@@ -10,6 +10,7 @@ command = "cd ../client_app && trunk build --release && cd ../server_cloudflare 
 # These are served by Cloudflare's CDN, not the Worker — zero CPU cost.
 [assets]
 directory = "../client_app/dist"
+not_found_handling = "single-page-application"
 
 # D1 database binding
 #   npx wrangler d1 create pcplayerpicker
@@ -21,6 +22,14 @@ database_name = "pcplayerpicker"
 #   npx wrangler d1 list
 database_id = "4e5da690-bd5b-4c22-ad8e-b08e1e43005b"
 migrations_dir = "migrations"
+
+# Custom domains — requires pcplayerpicker.com to be in a Cloudflare zone.
+# Run `npx wrangler deploy` after adding the domain to your Cloudflare account.
+[[custom_domains]]
+pattern = "pcplayerpicker.com"
+
+[[custom_domains]]
+pattern = "www.pcplayerpicker.com"
 
 [vars]
 ENVIRONMENT = "development"

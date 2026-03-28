@@ -48,7 +48,7 @@ pub fn LandingPage() -> impl IntoView {
                                 "PWA + Static Site"
                             </div>
                             <h1 class="mt-6 max-w-2xl text-5xl font-black tracking-[-0.04em] text-white sm:text-6xl">
-                                "Schedule sharper sessions. Rank players with uncertainty."
+                                "Schedule sharper sessions. Rank players, with uncertainty shown."
                             </h1>
                             <p class="mt-5 max-w-2xl text-lg leading-8 text-slate-300">
                                 "PCPlayerPicker is built for coaches running repeat small-sided games. It keeps the core loop on the device, updates rankings from player goal totals, and keeps the public site lightweight."
@@ -68,9 +68,9 @@ pub fn LandingPage() -> impl IntoView {
                                 </A>
                             </div>
                             <div class="mt-8 grid gap-3 sm:grid-cols-3">
-                                <HeroStat value="Offline" label="Coach mode works without network"/>
-                                <HeroStat value="Goals" label="Primary per-player result input"/>
-                                <HeroStat value="PWA" label="Installable shell with cached routes"/>
+                                <HeroStat value="100% Offline" label="Coach mode works without network"/>
+                                <HeroStat value="Goal totals" label="Per-player input, not just wins"/>
+                                <HeroStat value="Installable" label="Add to home screen on any device"/>
                             </div>
                         </div>
 
@@ -109,8 +109,8 @@ pub fn LandingPage() -> impl IntoView {
             <section class="mx-auto max-w-6xl px-5 py-16 sm:px-8">
                 <div class="flex items-end justify-between gap-6">
                     <div class="max-w-2xl">
-                        <p class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-200">"What ships now"</p>
-                        <h2 class="mt-3 text-3xl font-bold tracking-[-0.03em] text-white">"Core public site and PWA shell"</h2>
+                        <p class="text-xs font-semibold uppercase tracking-[0.22em] text-teal-200">"Features"</p>
+                        <h2 class="mt-3 text-3xl font-bold tracking-[-0.03em] text-white">"Built for the sideline"</h2>
                     </div>
                     <A href="/faq" attr:class="hidden text-sm font-semibold text-slate-300 transition hover:text-white sm:inline-flex">
                         "View FAQ"
@@ -192,12 +192,12 @@ pub fn TutorialPage() -> impl IntoView {
             "Results default to did-not-play instead of zero. That keeps inactive or substituted players from being misread as scoreless participants.",
         ),
         (
-            "Update rankings and analysis",
-            "The Analysis tab recomputes overall rankings and opens the advanced panes for attack/defense/teamwork and synergy once there is enough data.",
+            "Explore analysis and export",
+            "The Analysis tab has three sub-tabs: Overall rankings with uncertainty intervals, A/D/T for attack, defense, and teamwork breakdowns, and Synergy for pairing effects. Download a CSV of rankings from the Overall sub-tab when you need a shareable snapshot.",
         ),
         (
             "Publish online only when needed",
-            "Go online from the coach dashboard to create assistant and player links. The local coach flow still remains usable if the network disappears later.",
+            "Go online from the coach dashboard to create assistant and player links. Set a recovery PIN to restore the session on another device if you lose local data. The local coach flow remains usable if the network disappears.",
         ),
     ];
 
@@ -240,6 +240,14 @@ pub fn TutorialPage() -> impl IntoView {
                         body="Open the site once, then use Add to Home Screen on iPhone/iPad or Install in Chrome-based browsers. The manifest and service worker provide the shell needed for that flow."
                     />
                 </div>
+                <div class="mt-12 flex justify-center">
+                    <A
+                        href="/coach"
+                        attr:class="inline-flex min-h-[52px] items-center justify-center rounded-2xl bg-teal-400 px-8 text-sm font-bold uppercase tracking-[0.14em] text-slate-950 transition hover:bg-teal-300"
+                    >
+                        "Launch Coach App"
+                    </A>
+                </div>
             </section>
         </SiteShell>
     }
@@ -274,6 +282,10 @@ pub fn FaqPage() -> impl IntoView {
             "Overall rankings answer the core team-impact question. The A/D/T view breaks output into attack, defense, and teamwork once enough matches exist. Synergy estimates which pairings outperform expectation together.",
         ),
         (
+            "Can I export rankings?",
+            "Yes. The Analysis tab has a Download Rankings CSV button. You can also import a previously saved CSV to overlay historical rankings in the Overall sub-tab.",
+        ),
+        (
             "Is this only for 2v2 soccer?",
             "No. 2v2 soccer is the default use case, but team size and sport are configurable so the app can extend to other formats such as 1v1 or larger small-sided games.",
         ),
@@ -282,8 +294,12 @@ pub fn FaqPage() -> impl IntoView {
             "Use initials, nicknames, or jersey numbers if you want less identifying data stored locally. The app is designed to keep the heavy lifting on the coach device, and online sharing is optional.",
         ),
         (
-            "Can this be self-hosted later?",
-            "Yes. The current structure keeps the worker thin and the core logic in Rust so the sync layer can be replaced by another backend if needed.",
+            "What is the recovery PIN for?",
+            "When you go online, you can set a short PIN on the session. If you switch devices or lose local data, entering the session ID and PIN pulls the full event log back from the server.",
+        ),
+        (
+            "Can I self-host this?",
+            "Yes. The worker is thin and the core logic lives in Rust, so the sync layer can be replaced by another backend without touching the coach app.",
         ),
     ];
 
@@ -364,9 +380,9 @@ fn SiteNav() -> impl IntoView {
                     <button
                         on:click=toggle
                         title="Toggle dark/light mode"
-                        class="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 text-slate-300 transition hover:border-white/30 hover:bg-white/10 hover:text-white"
+                        class="flex h-9 items-center justify-center rounded-full border border-white/15 bg-white/5 px-3 text-xs font-semibold text-slate-300 transition hover:border-white/30 hover:bg-white/10 hover:text-white"
                     >
-                        {move || if dark.get() { "☀" } else { "🌙" }}
+                        {move || if dark.get() { "Light" } else { "Dark" }}
                     </button>
                     <A href="/coach" attr:class="inline-flex min-h-[40px] items-center rounded-full bg-white px-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-950 transition hover:bg-slate-100">
                         "Open App"
@@ -379,9 +395,9 @@ fn SiteNav() -> impl IntoView {
                     <button
                         on:click=toggle
                         title="Toggle dark/light mode"
-                        class="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 text-slate-300 transition hover:border-white/30 hover:bg-white/10 hover:text-white"
+                        class="flex h-9 items-center justify-center rounded-full border border-white/15 bg-white/5 px-3 text-xs font-semibold text-slate-300 transition hover:border-white/30 hover:bg-white/10 hover:text-white"
                     >
-                        {move || if dark.get() { "☀" } else { "🌙" }}
+                        {move || if dark.get() { "Light" } else { "Dark" }}
                     </button>
                     <A href="/coach" attr:class="inline-flex min-h-[44px] items-center rounded-full bg-white px-4 text-slate-950 transition hover:bg-slate-100">
                         "Open App"
@@ -410,6 +426,7 @@ fn SiteFooter() -> impl IntoView {
                     <A href="/tutorial" attr:class="transition hover:text-white">"Tutorial"</A>
                     <A href="/faq" attr:class="transition hover:text-white">"FAQ"</A>
                     <A href="/coach" attr:class="transition hover:text-white">"Coach App"</A>
+                    <a href="https://github.com/winedarksea/pcplayerpicker" target="_blank" rel="noopener noreferrer" class="transition hover:text-white">"GitHub"</a>
                 </div>
             </div>
         </footer>
@@ -440,8 +457,7 @@ fn FeatureCard(title: &'static str, body: &'static str) -> impl IntoView {
 fn RoleCard(title: &'static str, body: &'static str) -> impl IntoView {
     view! {
         <div class="rounded-[24px] border border-white/10 bg-slate-900/60 p-6">
-            <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{title}</p>
-            <p class="mt-3 text-lg font-bold text-white">{title}</p>
+            <p class="text-lg font-bold text-white">{title}</p>
             <p class="mt-3 leading-7 text-slate-300">{body}</p>
         </div>
     }
