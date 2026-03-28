@@ -77,17 +77,10 @@ pub fn save_sync_state(state: &SyncState) {
     }
 }
 
-#[allow(dead_code)]
-pub fn clear_sync_state(session_id: &str) {
-    crate::state::storage_remove(&sync_key(session_id));
-}
-
 // ── Upload response ───────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct UploadResponse {
-    #[allow(dead_code)]
-    ok: bool,
     cursor: u64,
     assistant_token: String,
     player_token: String,
@@ -252,10 +245,10 @@ pub async fn set_token_pin(token: &str, pin: &str) -> Result<(), String> {
 }
 
 /// Set or update the coach recovery PIN for a session in D1.
-pub async fn set_recovery_pin(session_id: &str, pin: &str) -> Result<(), String> {
+pub async fn set_recovery_pin(sync: &SyncState, pin: &str) -> Result<(), String> {
     let body = serde_json::json!({ "pin": pin });
-    let url = format!("{}/api/sessions/{}/pin", api_base(), session_id);
-    fetch_json(&url, "POST", Some(body.to_string()), None)
+    let url = format!("{}/api/sessions/{}/pin", api_base(), sync.session_id);
+    fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key))
         .await
         .map(|_| ())
 }

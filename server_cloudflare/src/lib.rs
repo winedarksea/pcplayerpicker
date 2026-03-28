@@ -453,13 +453,19 @@ async fn handle_append_events(
 ///
 /// Body: `{ "pin": "1234" }` (4–8 digit string).
 /// Stores a salted SHA-256 hash in the sessions table.
-/// Returns 200 OK or 400/404.
+/// Requires `X-Coach-Key` header.
+/// Returns 200 OK or 400/401/403/404.
 async fn handle_set_pin(
     mut req: Request,
     session_id: &str,
     env: &Env,
     origin: &str,
 ) -> Result<Response> {
+    let coach_key_header = req.headers().get("X-Coach-Key")?.unwrap_or_default();
+    if coach_key_header.is_empty() {
+        return err_json("Missing X-Coach-Key header", 401, origin);
+    }
+
     #[derive(serde::Deserialize)]
     struct PinBody {
         pin: String,
@@ -473,14 +479,22 @@ async fn handle_set_pin(
     }
 
     let db = env.d1("DB")?;
-    // Confirm session exists
+    // Confirm session exists and validate coach key
     let row = db
-        .prepare("SELECT id FROM sessions WHERE id = ?1")
+        .prepare("SELECT coach_key_hash FROM sessions WHERE id = ?1")
         .bind(&[session_id.into()])?
         .first::<serde_json::Value>(None)
         .await?;
-    if row.is_none() {
-        return err_json("Session not found", 404, origin);
+    let stored = match row
+        .as_ref()
+        .and_then(|r| r.get("coach_key_hash"))
+        .and_then(|v| v.as_str())
+    {
+        Some(h) if !h.is_empty() => h.to_string(),
+        _ => return err_json("Session not found", 404, origin),
+    };
+    if !hash_matches(&stored, &coach_key_header, session_id) {
+        return err_json("Invalid coach key", 403, origin);
     }
 
     let hash = simple_hash(&body.pin, session_id);
@@ -929,7 +943,11 @@ async fn handle_heartbeat_post(
         .bind(&[session_id.into()])?
         .first::<serde_json::Value>(None)
         .await?;
-    let stored = match row.as_ref().and_then(|r| r.get("coach_key_hash")).and_then(|v| v.as_str()) {
+    let stored = match row
+        .as_ref()
+        .and_then(|r| r.get("coach_key_hash"))
+        .and_then(|v| v.as_str())
+    {
         Some(h) if !h.is_empty() => h.to_string(),
         _ => return err_json("Session not found", 404, origin),
     };
@@ -980,7 +998,11 @@ async fn handle_heartbeat_get(
         .bind(&[session_id.into()])?
         .first::<serde_json::Value>(None)
         .await?;
-    let stored = match row.as_ref().and_then(|r| r.get("coach_key_hash")).and_then(|v| v.as_str()) {
+    let stored = match row
+        .as_ref()
+        .and_then(|r| r.get("coach_key_hash"))
+        .and_then(|v| v.as_str())
+    {
         Some(h) if !h.is_empty() => h.to_string(),
         _ => return err_json("Session not found", 404, origin),
     };

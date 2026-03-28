@@ -5,7 +5,7 @@
 ///   2. Sample realistic goal counts from a negative binomial based on true skills
 ///   3. Enter results via SessionManager
 ///   4. Compute rankings via GoalModelEngine
-///   5. Verify final Kendall tau correlation > 0.8 between true skill and estimated rank
+///   5. Verify final Kendall tau correlation > 0.6 between true skill and estimated rank
 ///
 /// This guards against regressions in the ranking engine, scheduler, and event system.
 use app_core::models::*;
@@ -93,8 +93,8 @@ fn full_offline_simulation_converges() {
     let mut match_id_counter = 0u32;
 
     for round in 0..N_ROUNDS {
-        // Get current state for scheduling
-        let players: Vec<Player> = manager.state.players.values().cloned().collect();
+        // Get current state for scheduling — only active players, matching the Scheduler trait contract
+        let players: Vec<Player> = manager.state.active_players().cloned().collect();
         let rankings = manager.state.rankings.clone();
         let config = manager.state.config.clone().unwrap();
 
@@ -226,6 +226,10 @@ fn full_offline_simulation_converges() {
     }
 
     let tau = kendall_tau(&true_rank, &est_rank);
+    println!(
+        "Kendall tau after {} rounds: {:.3}  (true: {:?}, est: {:?})",
+        N_ROUNDS, tau, true_rank, est_rank
+    );
     assert!(
         tau > 0.6,
         "Kendall tau should be > 0.6 after {} rounds, got {:.3}\n  true_rank: {:?}\n  est_rank:  {:?}",
@@ -334,4 +338,168 @@ fn dropout_excluded_from_scheduling() {
     // Rankings should still include the inactive player
     let all_players_count = manager.state.players.len();
     assert_eq!(all_players_count, 6, "all players retained in state");
+}
+
+#[test]
+fn voided_match_excluded_from_rankings() {
+    use app_core::events::Event;
+    use app_core::models::{MatchId, MatchStatus, RoundNumber, ScheduledMatch};
+
+    let config = SessionConfig::new(2, 1, Sport::Soccer);
+    let mut manager = SessionManager::new(config);
+    let ids: Vec<PlayerId> = (0..4)
+        .map(|i| manager.add_player(format!("P{}", i + 1)))
+        .collect();
+
+    // Schedule one match manually
+    let m = ScheduledMatch {
+        id: MatchId(1001),
+        round: RoundNumber(1),
+        field: 1,
+        team_a: vec![ids[0], ids[1]],
+        team_b: vec![ids[2], ids[3]],
+        status: MatchStatus::Scheduled,
+    };
+    manager.log.append(
+        Event::ScheduleGenerated {
+            round: RoundNumber(1),
+            matches: vec![m],
+        },
+        Role::Coach,
+    );
+    manager.state = app_core::events::materialize(&manager.log);
+
+    // Enter a score so the match is completed
+    let mut scores = HashMap::new();
+    for &id in &ids {
+        scores.insert(id, PlayerMatchScore::scored(2));
+    }
+    manager.enter_score(
+        MatchResult {
+            match_id: MatchId(1001),
+            scores,
+            duration_multiplier: 1.0,
+            entered_by: Role::Coach,
+        },
+        Role::Coach,
+    );
+    assert_eq!(
+        manager.completed_match_results().len(),
+        1,
+        "match should be completed before voiding"
+    );
+
+    // Void the match
+    manager.void_match(MatchId(1001));
+
+    // Voided match must not appear in completed results fed to the ranking engine
+    assert_eq!(
+        manager.completed_match_results().len(),
+        0,
+        "voided match should be excluded from completed results"
+    );
+    assert_eq!(
+        manager.state.matches[&MatchId(1001)].status,
+        MatchStatus::Voided,
+        "match status should be Voided"
+    );
+}
+
+#[test]
+fn score_correction_overrides_original() {
+    use app_core::events::Event;
+    use app_core::models::{MatchId, MatchStatus, RoundNumber, ScheduledMatch};
+
+    let config = SessionConfig::new(2, 1, Sport::Soccer);
+    let mut manager = SessionManager::new(config);
+    let ids: Vec<PlayerId> = (0..4)
+        .map(|i| manager.add_player(format!("P{}", i + 1)))
+        .collect();
+
+    let m = ScheduledMatch {
+        id: MatchId(1001),
+        round: RoundNumber(1),
+        field: 1,
+        team_a: vec![ids[0], ids[1]],
+        team_b: vec![ids[2], ids[3]],
+        status: MatchStatus::Scheduled,
+    };
+    manager.log.append(
+        Event::ScheduleGenerated {
+            round: RoundNumber(1),
+            matches: vec![m],
+        },
+        Role::Coach,
+    );
+    manager.state = app_core::events::materialize(&manager.log);
+
+    // Enter initial score
+    let mut scores = HashMap::new();
+    scores.insert(ids[0], PlayerMatchScore::scored(1));
+    scores.insert(ids[1], PlayerMatchScore::scored(1));
+    scores.insert(ids[2], PlayerMatchScore::scored(0));
+    scores.insert(ids[3], PlayerMatchScore::scored(0));
+    manager.enter_score(
+        MatchResult {
+            match_id: MatchId(1001),
+            scores,
+            duration_multiplier: 1.0,
+            entered_by: Role::Coach,
+        },
+        Role::Coach,
+    );
+
+    // Correct the score
+    let mut corrected = HashMap::new();
+    corrected.insert(ids[0], PlayerMatchScore::scored(5));
+    corrected.insert(ids[1], PlayerMatchScore::scored(5));
+    corrected.insert(ids[2], PlayerMatchScore::scored(0));
+    corrected.insert(ids[3], PlayerMatchScore::scored(0));
+    manager.correct_score(MatchResult {
+        match_id: MatchId(1001),
+        scores: corrected,
+        duration_multiplier: 1.0,
+        entered_by: Role::Coach,
+    });
+
+    let result = manager.state.results.get(&MatchId(1001)).unwrap();
+    assert_eq!(
+        result.scores[&ids[0]].goals,
+        Some(5),
+        "corrected score should replace original"
+    );
+    assert_eq!(
+        result.scores[&ids[2]].goals,
+        Some(0),
+        "opponent score should be as corrected"
+    );
+}
+
+#[test]
+fn reactivated_player_returns_to_active() {
+    let config = SessionConfig::new(2, 1, Sport::Soccer);
+    let mut manager = SessionManager::new(config);
+    let id = manager.add_player("Alice".into());
+
+    manager.deactivate_player(id);
+    assert_eq!(
+        manager.state.active_players().count(),
+        0,
+        "deactivated player should not be active"
+    );
+
+    manager.reactivate_player(id);
+    assert_eq!(
+        manager.state.active_players().count(),
+        1,
+        "reactivated player should be active again"
+    );
+    assert!(
+        manager.active_player_ids().contains(&id),
+        "reactivated player should appear in active_player_ids()"
+    );
+    assert!(
+        manager.state.players[&id].deactivated_at_round.is_none(),
+        "deactivated_at_round should be cleared on reactivation"
+    );
 }

@@ -2003,7 +2003,7 @@ pub fn OnlineTab() -> impl IntoView {
 
                                 // Recovery PIN
                                 {
-                                    let session_id_for_pin = state.session_id.clone();
+                                    let sync_for_pin = state.clone();
                                     view! {
                                         <div class="bg-gray-900 border border-gray-700/50 rounded-xl p-4">
                                             <p class="text-xs font-semibold uppercase tracking-widest \
@@ -2046,7 +2046,7 @@ pub fn OnlineTab() -> impl IntoView {
                                                            transition-colors min-h-[44px] \
                                                            disabled:opacity-50 disabled:cursor-not-allowed"
                                                     on:click={
-                                                        let sid = session_id_for_pin.clone();
+                                                        let sync_state = sync_for_pin.clone();
                                                         move |_| {
                                                             let pin = pin_input.get_untracked();
                                                             if pin.len() < 4 {
@@ -2054,10 +2054,10 @@ pub fn OnlineTab() -> impl IntoView {
                                                                 pin_saved.set(false);
                                                                 return;
                                                             }
-                                                            let sid = sid.clone();
+                                                            let sync_state = sync_state.clone();
                                                             pin_status.set("Setting…".to_string());
                                                             leptos::task::spawn_local(async move {
-                                                                match set_recovery_pin(&sid, &pin).await {
+                                                                match set_recovery_pin(&sync_state, &pin).await {
                                                                     Ok(_) => {
                                                                         pin_status.set("Recovery PIN saved.".to_string());
                                                                         pin_saved.set(true);
