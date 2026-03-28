@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /a/
+Disallow: /p/
+
+Sitemap: https://pcplayerpicker.com/sitemap.xml

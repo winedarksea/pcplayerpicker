@@ -1,0 +1,19 @@
+[build]
+target = "index.html"
+dist = "dist"
+# Minify HTML in release builds
+minify = false  # enabled per-profile below
+
+[watch]
+ignore = ["dist", "target"]
+
+[serve]
+port = 8080
+open = false
+
+# Run Tailwind CLI before Trunk processes assets so tailwind.css exists
+# when Trunk picks up the <link data-trunk rel="css"> in index.html.
+[[hooks]]
+stage = "pre_build"
+command = "npx"
+command_arguments = ["tailwindcss", "-i", "src/input.css", "-o", "tailwind.css", "--minify"]

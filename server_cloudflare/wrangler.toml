@@ -1,0 +1,32 @@
+name = "pcplayerpicker"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-03-27"
+
+# Build the Worker using worker-build (wraps wasm-pack for Workers target)
+[build]
+command = "cd ../client_app && trunk build --release && cd ../server_cloudflare && cargo install -q \"worker-build@^0.7\" && worker-build --release"
+
+# Serve the compiled client_app WASM bundle as static assets.
+# These are served by Cloudflare's CDN, not the Worker — zero CPU cost.
+[assets]
+directory = "../client_app/dist"
+
+# D1 database binding
+#   npx wrangler d1 create pcplayerpicker
+[[d1_databases]]
+binding = "DB"
+database_name = "pcplayerpicker"
+# Forks must replace this with their own D1 UUID:
+#   npx wrangler d1 create pcplayerpicker
+#   npx wrangler d1 list
+database_id = "4e5da690-bd5b-4c22-ad8e-b08e1e43005b"
+migrations_dir = "migrations"
+
+[vars]
+ENVIRONMENT = "development"
+# PPP_ADMIN_SECRET = set via `wrangler secret put PPP_ADMIN_SECRET` — never in wrangler.toml
+
+# Nightly cleanup: delete raw events older than 90 days, prune archives older than 365 days.
+# Runs at 03:00 UTC daily. See the `cleanup` scheduled handler in src/lib.rs.
+[triggers]
+crons = ["0 3 * * *"]

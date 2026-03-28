@@ -1,0 +1,30 @@
+[package]
+name = "app_core"
+version = "0.1.0"
+edition = "2021"
+
+# Feature flags control what gets compiled into each target.
+# `ranking` and `scheduling` are CLIENT-ONLY — never enabled by server_cloudflare.
+# This prevents nalgebra and ranking math from entering the Worker bundle.
+[features]
+default = []
+ranking = ["dep:nalgebra"]
+scheduling = []
+# Enable this when compiling to wasm32. Activates window.crypto for uuid/rand.
+js = ["uuid/js", "dep:getrandom"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+getrandom = { version = "0.2", features = ["js"], optional = true }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+
+# rand: std_rng + std sufficient; WASM callers must add getrandom with "js" feature
+rand = { version = "0.8", default-features = false, features = ["std_rng", "std"] }
+
+# Ranking feature — pure Rust linear algebra, WASM-safe, no BLAS/LAPACK
+nalgebra = { version = "0.33", optional = true, default-features = false, features = ["std"] }
+
+[dev-dependencies]
+approx = "0.5"

@@ -1,0 +1,51 @@
+{
+  "name": "PCPlayerPicker",
+  "short_name": "PCPicker",
+  "description": "Offline-first match scheduling and player ranking for repeat team sessions.",
+  "start_url": "/coach",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#030712",
+  "theme_color": "#030712",
+  "categories": ["sports", "productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Coach App",
+      "short_name": "Coach",
+      "url": "/coach"
+    },
+    {
+      "name": "Tutorial",
+      "short_name": "Tutorial",
+      "url": "/tutorial"
+    },
+    {
+      "name": "FAQ",
+      "short_name": "FAQ",
+      "url": "/faq"
+    }
+  ],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/maskable-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

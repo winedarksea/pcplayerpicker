@@ -1,0 +1,120 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Fast CI gate: check, test, lint ────────────────────────────────────────
+  ci:
+    name: Check · Test · Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo check (all targets, native)
+        run: cargo check --workspace --all-targets
+
+      - name: cargo test (workspace, native)
+        run: cargo test --workspace
+
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --workspace -- -D warnings
+
+  # ── Bundle size gate: Worker compressed < 3 MiB ────────────────────────────
+  bundle-size:
+    name: Worker bundle size < 3 MiB
+    runs-on: ubuntu-latest
+    needs: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Trunk
+        run: cargo install --locked trunk
+
+      - name: Install Tailwind CSS dependencies
+        working-directory: client_app
+        run: npm install
+
+      - name: Build client WASM (release)
+        working-directory: client_app
+        run: trunk build --release
+
+      - name: Build Worker (release)
+        working-directory: server_cloudflare
+        run: |
+          cargo install -q "worker-build@^0.7"
+          worker-build --release
+
+      - name: Assert compressed Worker < 3 MiB
+        working-directory: server_cloudflare
+        run: |
+          # Compress the Worker shim and WASM together
+          WORKER_DIR=build/worker
+          if [ ! -d "$WORKER_DIR" ]; then
+            echo "Worker build dir not found at $WORKER_DIR" && exit 1
+          fi
+          SIZE=$(tar -czf - "$WORKER_DIR" | wc -c)
+          echo "Compressed Worker size: $SIZE bytes (limit: 3145728)"
+          if [ "$SIZE" -gt 3145728 ]; then
+            echo "ERROR: Worker bundle exceeds 3 MiB free-tier limit" && exit 1
+          fi
+
+  # ── Deploy: only on push to main, after CI + size checks ───────────────────
+  deploy:
+    name: Deploy to Cloudflare Workers
+    runs-on: ubuntu-latest
+    needs: [ci, bundle-size]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Trunk
+        run: cargo install --locked trunk
+
+      - name: Install Tailwind CSS dependencies
+        working-directory: client_app
+        run: npm install
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: server_cloudflare
+          command: deploy --var ENVIRONMENT:production

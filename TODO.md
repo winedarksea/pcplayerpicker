@@ -110,3 +110,47 @@ There should be a unittest for full simulation of the offline functionality (gen
 Include a test that the cloudflare bundle for the worker, compressed, is less than 3MB
 
 GitHub Actions CI/CD for Cloudflare: https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/ and https://github.com/cloudflare/wrangler-action
+
+
+## Issues to fix before production
+
+### Critical — ALL RESOLVED
+- ✅ Tailwind via CDN → local build via Trunk.toml pre_build hook + input.css @layer components
+- ✅ D1 migration schema mismatch → app_core/db/queries.rs documented as future OPFS path only
+- ✅ No rate limiting → MAX_EVENTS_UPLOAD (1 000) + MAX_EVENTS_APPEND (100) in lib.rs
+- ✅ CORS wildcard → ALLOWED_ORIGINS allowlist (pcplayerpicker.com + localhost)
+- ✅ Session authorization → handle_append_events requires X-Coach-Key (coach) or validated share token (assistant); GET events is intentionally read-only (UUID is unguessable)
+
+### High priority — ALL RESOLVED
+- ✅ Normal sampling (Box-Muller) → sample_standard_normals() in goal_model.rs
+- ✅ GoalModelEngine team context → TEAMMATE_CONTEXT_WEIGHT / OPPONENT_CONTEXT_WEIGHT applied
+- ✅ add_player ID collision → keys().max().saturating_add(1), not len()-based
+- ✅ 27 clippy warnings → 0 warnings (cargo clippy --target wasm32-unknown-unknown)
+- ✅ Verify clean-up cron → ARCHIVE_AFTER_DAYS=90, ARCHIVE_RETENTION_DAYS=365; cron prunes heartbeats > 24 h; D1 free tier is 5 GB; within expected budget
+
+### Medium priority — ALL RESOLVED
+- ✅ OPFS storage → state/opfs.rs; save_to_opfs() called on every save; restore_sessions_from_opfs() at startup; Safari 16.4+ OPFS is NOT subject to the 7-day eviction cap
+- ✅ Service worker WASM caching → precacheBuildAssets() in sw.js parses index.html and caches all .wasm/.js/.css assets dynamically
+- ✅ No delete confirmation → window.confirm in on_delete (home.rs)
+- ✅ No void confirmation → window.confirm in on_void (dashboard.rs)
+- ✅ Auto-sync for assistants/players → 10-second polling loop in assistant.rs + player.rs
+- ✅ estimated_rounds formula → correct formula using matches_per_round and observations_per_round
+- ✅ Dark mode toggle on mobile → toggle button present in md:hidden section of SiteNav
+
+### Low priority — ALL RESOLVED
+- ✅ section-label / stepper-btn → defined in client_app/src/input.css @layer components
+- ✅ CSV export comma escaping → escape_csv_field() in app_core/src/io/csv.rs
+- ✅ Heartbeat device list → DeviceListCard in dashboard.rs; 60 s heartbeat loop
+
+### Remaining (not blocking launch)
+- wrangler.toml database_id is account-specific — document in README for anyone forking the project
+- Admin dashboard UI — /api/admin/sessions returns JSON; a visual dashboard is future work
+- Full SQLite/OPFS normalized query layer — app_core/db/queries.rs schema is ready; wiring it to a SQLite WASM runtime is future work (IDB + OPFS file backup covers the data-loss risk for now)
+
+### iOS storage note
+On Apple devices, session data is now written to three layers in order:
+1. localStorage (primary, synchronous)
+2. IndexedDB (async backup, evicted less aggressively than localStorage)
+3. OPFS — Origin Private File System (async backup, truly persistent on Safari 16.4+; NOT subject to the 7-day eviction cap regardless of Home Screen status)
+
+The iOS "Add to Home Screen" nudge in the coach home additionally prompts users to install the PWA. Installing causes storage.persist() to return true, which grants durable status to localStorage and IDB as well.

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta name="theme-color" content="#030712"/>
+    <meta name="color-scheme" content="dark"/>
+    <title>PCPlayerPicker</title>
+    <meta name="description" content="Bayesian active learning for player ranking and match scheduling."/>
+    <meta name="robots" content="index,follow"/>
+    <meta property="og:title" content="PCPlayerPicker"/>
+    <meta property="og:description" content="Offline-first player ranking and active-learning match scheduling for team sessions."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://pcplayerpicker.com/"/>
+    <meta property="og:image" content="https://pcplayerpicker.com/icon.svg"/>
+    <meta name="twitter:card" content="summary_large_image"/>
+    <meta name="twitter:title" content="PCPlayerPicker"/>
+    <meta name="twitter:description" content="Offline-first player ranking and active-learning match scheduling for team sessions."/>
+    <link rel="canonical" href="https://pcplayerpicker.com/"/>
+
+    <!-- Apply dark/light class before first paint to avoid flash -->
+    <script>
+        (function() {
+            var mode = localStorage.getItem('pcpp_dark_mode');
+            if (mode !== 'light') {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
+
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-5712GF6167"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-5712GF6167');
+    </script>
+
+    <!-- Trunk builds and injects the WASM bundle here -->
+    <!-- wasm-opt level set to 4 for size optimization -->
+    <link data-trunk rel="rust" data-wasm-opt="4"/>
+
+    <!-- PWA manifest + static assets -->
+    <link data-trunk rel="copy-file" href="manifest.json"/>
+    <link data-trunk rel="copy-file" href="sw.js"/>
+    <link data-trunk rel="copy-file" href="icon-192.png"/>
+    <link data-trunk rel="copy-file" href="icon-512.png"/>
+    <link data-trunk rel="copy-file" href="icon.svg"/>
+    <link data-trunk rel="copy-file" href="maskable-icon.svg"/>
+    <link data-trunk rel="copy-file" href="robots.txt"/>
+    <link data-trunk rel="copy-file" href="sitemap.xml"/>
+    <link rel="manifest" href="/manifest.json"/>
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"/>
+    <link rel="icon" type="image/svg+xml" href="/icon.svg"/>
+    <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png"/>
+    <meta name="apple-mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+    <meta name="apple-mobile-web-app-title" content="PCPlayerPicker"/>
+
+    <!-- Tailwind CSS — built locally by the pre_build hook in Trunk.toml -->
+    <link data-trunk rel="css" href="tailwind.css"/>
+
+    <style>
+        /* Force dark mode globally — fitness-app style */
+        html { background-color: #030712; }
+        body { color: #f9fafb; }
+    </style>
+</head>
+<body class="font-sans antialiased">
+    <!-- Leptos CSR mounts here -->
+</body>
+</html>

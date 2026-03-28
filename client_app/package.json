@@ -1,0 +1,12 @@
+{
+  "name": "pcplayerpicker-client",
+  "version": "0.1.0",
+  "private": true,
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  },
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/input.css -o ./tailwind.css --minify",
+    "watch:css": "tailwindcss -i ./src/input.css -o ./tailwind.css --watch"
+  }
+}
