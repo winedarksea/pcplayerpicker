@@ -38,7 +38,7 @@
 
     <!-- Trunk builds and injects the WASM bundle here -->
     <!-- wasm-opt level set to 4 for size optimization -->
-    <link data-trunk rel="rust" data-wasm-opt="4"/>
+    <link data-trunk rel="rust" data-wasm-opt="4" data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int"/>
 
     <!-- PWA manifest + static assets -->
     <link data-trunk rel="copy-file" href="manifest.json"/>
