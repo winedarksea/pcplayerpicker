@@ -2,7 +2,7 @@
 target = "index.html"
 dist = "dist"
 # Minify HTML in release builds
-minify = "none"
+minify = "on_release"
 
 [watch]
 ignore = ["dist", "target"]
