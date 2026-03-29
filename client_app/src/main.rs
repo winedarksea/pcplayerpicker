@@ -16,15 +16,25 @@ use leptos_router::{
 
 fn main() {
     console_error_panic_hook::set_once();
+    pre_mount_init();
+    leptos::mount::mount_to_body(App);
+}
+
+/// Everything that runs before `mount_to_body` initialises the Leptos executor.
+///
+/// IMPORTANT: this function must never call `leptos::task::spawn_local`.
+/// The Leptos executor (any_spawner) is not configured until `mount_to_body`
+/// runs; calling it earlier panics with:
+///   "Executor::spawn_local called, but no global 'spawn_local' function is configured"
+/// Use `wasm_bindgen_futures::spawn_local` for any async work here instead.
+fn pre_mount_init() {
     register_service_worker();
-    request_persistent_storage();
     // Recover sessions lost to Safari's storage eviction.
     // Run IDB first (faster), then OPFS (slower but more durable).
-    leptos::task::spawn_local(async {
+    wasm_bindgen_futures::spawn_local(async {
         restore_sessions_from_idb().await;
         restore_sessions_from_opfs().await;
     });
-    leptos::mount::mount_to_body(App);
 }
 
 fn register_service_worker() {
@@ -33,22 +43,6 @@ fn register_service_worker() {
     };
     let service_worker = window.navigator().service_worker();
     let _ = service_worker.register("/sw.js");
-}
-
-/// Ask the browser to treat localStorage as persistent (not subject to eviction).
-/// On iOS/Safari this reduces the risk of data loss when storage is under pressure.
-/// The call is fire-and-forget; failure is silent and non-fatal.
-fn request_persistent_storage() {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let storage_mgr = window.navigator().storage();
-    if let Ok(promise) = storage_mgr.persist() {
-        // Spawn the promise so the JS engine resolves it; we don't need the bool result.
-        leptos::task::spawn_local(async move {
-            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-        });
-    }
 }
 
 #[component]
@@ -104,5 +98,28 @@ fn NotFound() -> impl IntoView {
                 </a>
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pre_mount_init;
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    /// Verifies that pre-mount initialisation never calls `leptos::task::spawn_local`.
+    ///
+    /// The Leptos executor (any_spawner) is not configured until `mount_to_body`
+    /// runs.  Calling `leptos::task::spawn_local` before that panics with:
+    ///   "Executor::spawn_local called, but no global 'spawn_local' function is configured"
+    /// which leaves the body empty → black screen.
+    ///
+    /// In the wasm_bindgen_test environment no Leptos executor is configured, so
+    /// any regression that reintroduces `leptos::task::spawn_local` inside
+    /// `pre_mount_init` will cause this test to fail with that exact panic.
+    #[wasm_bindgen_test]
+    fn pre_mount_init_does_not_require_leptos_executor() {
+        pre_mount_init();
     }
 }

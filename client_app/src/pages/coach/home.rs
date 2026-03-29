@@ -7,7 +7,20 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_navigate;
 use wasm_bindgen::JsValue;
+use wasm_bindgen_futures::JsFuture;
 use js_sys::Reflect;
+
+/// Ask the browser to treat storage as persistent (not subject to eviction).
+/// Called when the coach app loads — not on the landing page.
+fn request_persistent_storage() {
+    let Some(window) = web_sys::window() else { return };
+    let storage_mgr = window.navigator().storage();
+    if let Ok(promise) = storage_mgr.persist() {
+        leptos::task::spawn_local(async move {
+            let _ = JsFuture::from(promise).await;
+        });
+    }
+}
 
 const IOS_NUDGE_KEY: &str = "pcpp_ios_nudge_dismissed";
 
@@ -45,6 +58,9 @@ pub fn CoachHome() -> impl IntoView {
 
     let ctx = use_context::<AppContext>().expect("AppContext missing");
     let navigate = use_navigate();
+
+    // Request persistent storage now that the user is in the app.
+    request_persistent_storage();
 
     // Clear any loaded session when returning home
     Effect::new(move |_| {
