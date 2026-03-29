@@ -2,6 +2,13 @@ name = "pcplayerpicker"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-03-27"
 
+# Custom domains — Cloudflare creates DNS records automatically on deploy.
+# Top-level key: must be before any [section] header (TOML scoping).
+routes = [
+  { pattern = "pcplayerpicker.com", custom_domain = true },
+  { pattern = "www.pcplayerpicker.com", custom_domain = true },
+]
+
 # Build the Worker using worker-build (wraps wasm-pack for Workers target)
 [build]
 command = "cd ../client_app && trunk build --release && cd ../server_cloudflare && cargo install -q \"worker-build@^0.7\" && worker-build --release"
@@ -22,13 +29,6 @@ database_name = "pcplayerpicker"
 #   npx wrangler d1 list
 database_id = "4e5da690-bd5b-4c22-ad8e-b08e1e43005b"
 migrations_dir = "migrations"
-
-# Custom domains — Cloudflare creates DNS records automatically on deploy.
-# Requires pcplayerpicker.com zone in the same Cloudflare account.
-routes = [
-  { pattern = "pcplayerpicker.com", custom_domain = true },
-  { pattern = "www.pcplayerpicker.com", custom_domain = true },
-]
 
 [vars]
 ENVIRONMENT = "development"
