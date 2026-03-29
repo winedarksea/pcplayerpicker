@@ -717,6 +717,47 @@ pub fn ResultsTab() -> impl IntoView {
         }
     };
 
+    // Handler for the "Download All Results CSV" button.
+    let on_download_results = {
+        let ctx = ctx.clone();
+        move |_| {
+            ctx.session.with(|s| {
+                let manager = match s {
+                    Some(m) => m,
+                    None => return,
+                };
+                let config = match manager.state.config.as_ref() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let players: Vec<_> = manager.state.players.values().cloned().collect();
+                let results: Vec<_> = manager
+                    .state
+                    .results
+                    .values()
+                    .filter(|r| {
+                        manager
+                            .state
+                            .matches
+                            .get(&r.match_id)
+                            .map(|m| m.status == MatchStatus::Completed)
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                if results.is_empty() {
+                    return;
+                }
+                let csv_str = csv::export_results(
+                    &results,
+                    &players,
+                    &manager.state.matches,
+                    config,
+                );
+                trigger_csv_download(&csv_str, "results.csv");
+            });
+        }
+    };
+
     view! {
         <div class="px-4 py-5 space-y-4">
             {move || {
@@ -775,6 +816,30 @@ pub fn ResultsTab() -> impl IntoView {
                         </div>
                     }.into_any()
                 }
+            }}
+
+            // Download all completed results as CSV (visible once any results exist).
+            {move || {
+                let has_results = ctx.session.with(|s| {
+                    s.as_ref().map(|m| {
+                        m.state.results.values().any(|r| {
+                            m.state.matches.get(&r.match_id)
+                                .map(|sm| sm.status == MatchStatus::Completed)
+                                .unwrap_or(false)
+                        })
+                    }).unwrap_or(false)
+                });
+                has_results.then(|| view! {
+                    <div class="pt-2 border-t border-gray-700/40">
+                        <button
+                            class="w-full py-2 text-sm text-gray-500 hover:text-gray-300 \
+                                   flex items-center justify-center gap-1.5 transition-colors"
+                            on:click=on_download_results.clone()
+                        >
+                            "↓ Download All Results CSV"
+                        </button>
+                    </div>
+                })
             }}
         </div>
     }

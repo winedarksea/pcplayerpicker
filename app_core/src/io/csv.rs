@@ -2,7 +2,8 @@
 //!
 //! Supports RFC4180-style quoted fields, escaped quotes, and embedded newlines.
 
-use crate::models::{MatchResult, Player, PlayerRanking};
+use crate::models::{MatchId, MatchResult, Player, PlayerRanking, ScheduledMatch, SessionConfig};
+use std::collections::HashMap;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -14,6 +15,29 @@ pub enum CsvError {
 }
 
 pub type CsvResult<T> = Result<T, CsvError>;
+
+/// One imported match with team assignments preserved.
+/// `goals = None` means the player did not play.
+#[derive(Debug, Clone)]
+pub struct RawImportedMatch {
+    pub round: u32,
+    /// (player_name, goals). `goals = None` → did not play.
+    pub team_a: Vec<(String, Option<u16>)>,
+    pub team_b: Vec<(String, Option<u16>)>,
+    pub duration_multiplier: f64,
+}
+
+/// Output of `import_results`: everything needed to reconstruct a session.
+#[derive(Debug, Clone)]
+pub struct ImportedResults {
+    pub sport: Option<String>,
+    pub team_size: Option<u8>,
+    pub scheduling_frequency: Option<u8>,
+    pub match_duration_minutes: Option<u16>,
+    /// All players from the metadata header, in registration order.
+    pub players: Vec<String>,
+    pub matches: Vec<RawImportedMatch>,
+}
 
 fn write_csv_record(out: &mut String, fields: &[String]) {
     for (i, field) in fields.iter().enumerate() {
@@ -242,13 +266,46 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
     out
 }
 
-/// Export match results to CSV string.
-pub fn export_results(results: &[&MatchResult], players: &[Player]) -> String {
+/// Export match results to CSV string with session metadata headers.
+///
+/// The output includes `# key: value` comment lines at the top (sport, team_size,
+/// scheduling_frequency, match_duration, and one `# player:` line per player), followed
+/// by a standard CSV with `match_id`, `round`, `team` (0=A / 1=B), `player`, `goals`,
+/// `did_not_play`, and `duration_multiplier` columns.
+///
+/// Pass this output to `import_results` to reconstruct a session on another device.
+pub fn export_results(
+    results: &[&MatchResult],
+    players: &[Player],
+    matches: &HashMap<MatchId, ScheduledMatch>,
+    config: &SessionConfig,
+) -> String {
     let mut out = String::new();
+
+    // ── Metadata header ──────────────────────────────────────────────────────
+    out.push_str(&format!("# sport: {}\n", config.sport));
+    out.push_str(&format!("# team_size: {}\n", config.team_size));
+    out.push_str(&format!(
+        "# scheduling_frequency: {}\n",
+        config.scheduling_frequency
+    ));
+    if let Some(mins) = config.match_duration_minutes {
+        out.push_str(&format!("# match_duration: {mins}\n"));
+    }
+    // All players in ID order so the recovered session has a stable roster.
+    let mut sorted_players: Vec<&Player> = players.iter().collect();
+    sorted_players.sort_by_key(|p| p.id.0);
+    for p in &sorted_players {
+        out.push_str(&format!("# player: {}\n", p.name));
+    }
+
+    // ── CSV header ───────────────────────────────────────────────────────────
     write_csv_record(
         &mut out,
         &[
             "match_id".to_string(),
+            "round".to_string(),
+            "team".to_string(),
             "player".to_string(),
             "goals".to_string(),
             "did_not_play".to_string(),
@@ -256,25 +313,249 @@ pub fn export_results(results: &[&MatchResult], players: &[Player]) -> String {
         ],
     );
 
-    let name_map: std::collections::HashMap<u32, &str> =
+    let name_map: HashMap<u32, &str> =
         players.iter().map(|p| (p.id.0, p.name.as_str())).collect();
 
-    for result in results {
-        for (player_id, score) in &result.scores {
-            let name = name_map.get(&player_id.0).copied().unwrap_or("?");
-            write_csv_record(
-                &mut out,
-                &[
-                    result.match_id.0.to_string(),
-                    name.to_string(),
-                    score.goals.unwrap_or(0).to_string(),
-                    if score.goals.is_none() { "yes" } else { "no" }.to_string(),
-                    result.duration_multiplier.to_string(),
-                ],
-            );
+    // Sort by (round, match_id) for deterministic, human-readable output.
+    let mut sorted_results: Vec<&MatchResult> = results.iter().copied().collect();
+    sorted_results.sort_by_key(|r| {
+        let round = matches.get(&r.match_id).map(|m| m.round.0).unwrap_or(0);
+        (round, r.match_id.0)
+    });
+
+    for result in sorted_results {
+        let sm = matches.get(&result.match_id);
+        let round = sm.map(|m| m.round.0).unwrap_or(0);
+        let team_a_ids: Vec<_> = sm.map(|m| m.team_a.clone()).unwrap_or_default();
+        let team_b_ids: Vec<_> = sm.map(|m| m.team_b.clone()).unwrap_or_default();
+
+        let write_row = |out: &mut String, pid: &crate::models::PlayerId, team: u8| {
+            if let Some(score) = result.scores.get(pid) {
+                let name = name_map.get(&pid.0).copied().unwrap_or("?");
+                write_csv_record(
+                    out,
+                    &[
+                        result.match_id.0.to_string(),
+                        round.to_string(),
+                        team.to_string(),
+                        name.to_string(),
+                        score.goals.unwrap_or(0).to_string(),
+                        if score.goals.is_none() { "yes" } else { "no" }.to_string(),
+                        result.duration_multiplier.to_string(),
+                    ],
+                );
+            }
+        };
+
+        for pid in &team_a_ids {
+            write_row(&mut out, pid, 0);
+        }
+        for pid in &team_b_ids {
+            write_row(&mut out, pid, 1);
+        }
+
+        // Fallback: any scored players not present in either team list.
+        let team_ids: std::collections::HashSet<_> =
+            team_a_ids.iter().chain(team_b_ids.iter()).copied().collect();
+        for pid in result.scores.keys() {
+            if !team_ids.contains(pid) {
+                write_row(&mut out, pid, 0);
+            }
         }
     }
+
     out
+}
+
+/// Parse a results CSV (as produced by `export_results`) back into structured session data.
+///
+/// `# key: value` metadata lines are extracted before CSV parsing so that player names
+/// containing commas are handled correctly.  If no `# player:` metadata lines are
+/// present (e.g., an older export), the player list is inferred from the data rows.
+pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
+    let mut sport: Option<String> = None;
+    let mut team_size: Option<u8> = None;
+    let mut scheduling_frequency: Option<u8> = None;
+    let mut match_duration_minutes: Option<u16> = None;
+    let mut players: Vec<String> = Vec::new();
+    let mut data_lines: Vec<&str> = Vec::new();
+
+    // Split metadata from CSV data before parsing so that commas in player
+    // names (on `# player:` lines) don't confuse the RFC4180 parser.
+    for line in csv.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            let meta = trimmed.trim_start_matches('#').trim();
+            if let Some(val) = meta.strip_prefix("sport:") {
+                sport = Some(val.trim().to_string());
+            } else if let Some(val) = meta.strip_prefix("team_size:") {
+                team_size = val.trim().parse().ok();
+            } else if let Some(val) = meta.strip_prefix("scheduling_frequency:") {
+                scheduling_frequency = val.trim().parse().ok();
+            } else if let Some(val) = meta.strip_prefix("match_duration:") {
+                match_duration_minutes = val.trim().parse().ok();
+            } else if let Some(val) = meta.strip_prefix("player:") {
+                let name = val.trim();
+                if !name.is_empty() {
+                    players.push(name.to_string());
+                }
+            }
+        } else {
+            data_lines.push(line);
+        }
+    }
+
+    let data_csv = data_lines.join("\n");
+    let records = parse_csv_records(&data_csv)?;
+
+    // Detect column positions from the header row.
+    let mut col_match_id = 0usize;
+    let mut col_round = 1usize;
+    let mut col_team = 2usize;
+    let mut col_player = 3usize;
+    let mut col_goals = 4usize;
+    let mut col_dnp = 5usize;
+    let mut col_duration = 6usize;
+    let mut data_start = 0usize;
+
+    if let Some(header) = records.first() {
+        if header
+            .first()
+            .map(|f| f.trim().eq_ignore_ascii_case("match_id"))
+            .unwrap_or(false)
+        {
+            col_match_id = header_index(header, &["match_id"]).unwrap_or(0);
+            col_round = header_index(header, &["round"]).unwrap_or(1);
+            col_team = header_index(header, &["team"]).unwrap_or(2);
+            col_player = header_index(header, &["player"]).unwrap_or(3);
+            col_goals = header_index(header, &["goals"]).unwrap_or(4);
+            col_dnp = header_index(header, &["did_not_play", "dnp"]).unwrap_or(5);
+            col_duration =
+                header_index(header, &["duration_multiplier", "duration"]).unwrap_or(6);
+            data_start = 1;
+        }
+    }
+
+    struct FlatRow {
+        match_id: String,
+        round: u32,
+        team: u8,
+        player: String,
+        goals: Option<u16>,
+        duration: f64,
+    }
+
+    let mut flat: Vec<FlatRow> = Vec::new();
+    for row in records.iter().skip(data_start) {
+        if row.iter().all(|c| c.trim().is_empty()) {
+            continue;
+        }
+        let match_id_str = row
+            .get(col_match_id)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if match_id_str.is_empty() {
+            continue;
+        }
+        let player = row
+            .get(col_player)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        if player.is_empty() {
+            continue;
+        }
+        let round: u32 = row
+            .get(col_round)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(1);
+        let team: u8 = row
+            .get(col_team)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let dnp = row
+            .get(col_dnp)
+            .map(|s| s.trim().eq_ignore_ascii_case("yes"))
+            .unwrap_or(false);
+        let goals: Option<u16> = if dnp {
+            None
+        } else {
+            row.get(col_goals)
+                .and_then(|s| s.trim().parse().ok())
+                .or(Some(0))
+        };
+        let duration: f64 = row
+            .get(col_duration)
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(1.0);
+
+        flat.push(FlatRow {
+            match_id: match_id_str,
+            round,
+            team,
+            player,
+            goals,
+            duration,
+        });
+    }
+
+    if flat.is_empty() && players.is_empty() {
+        return Err(CsvError::Format(
+            "No session data found in CSV".to_string(),
+        ));
+    }
+
+    // Group rows by match_id, preserving insertion order.
+    let mut seen_ids: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, row) in flat.iter().enumerate() {
+        if !groups.contains_key(&row.match_id) {
+            seen_ids.push(row.match_id.clone());
+        }
+        groups.entry(row.match_id.clone()).or_default().push(i);
+    }
+
+    let mut imported_matches: Vec<RawImportedMatch> = Vec::new();
+    for mid in &seen_ids {
+        let indices = &groups[mid];
+        let round = flat[indices[0]].round;
+        let duration = flat[indices[0]].duration;
+        let mut team_a: Vec<(String, Option<u16>)> = Vec::new();
+        let mut team_b: Vec<(String, Option<u16>)> = Vec::new();
+        for &idx in indices {
+            let row = &flat[idx];
+            let entry = (row.player.clone(), row.goals);
+            if row.team == 0 {
+                team_a.push(entry);
+            } else {
+                team_b.push(entry);
+            }
+        }
+        imported_matches.push(RawImportedMatch {
+            round,
+            team_a,
+            team_b,
+            duration_multiplier: duration,
+        });
+    }
+
+    // If no metadata player list, fall back to unique names from data rows.
+    if players.is_empty() {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for row in &flat {
+            if seen.insert(row.player.clone()) {
+                players.push(row.player.clone());
+            }
+        }
+    }
+
+    Ok(ImportedResults {
+        sport,
+        team_size,
+        scheduling_frequency,
+        match_duration_minutes,
+        players,
+        matches: imported_matches,
+    })
 }
 
 /// Parse a rankings CSV (as produced by `export_rankings`) back into a list of

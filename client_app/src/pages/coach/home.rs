@@ -73,11 +73,16 @@ pub fn CoachHome() -> impl IntoView {
     // Bump this signal to force a re-read of session summaries after delete
     let delete_trigger = RwSignal::new(0u32);
 
-    // Recovery flow signals
+    // Server recovery signals
     let show_recover = RwSignal::new(false);
     let recover_id = RwSignal::new(String::new());
     let recover_pin = RwSignal::new(String::new());
     let recover_status = RwSignal::new(String::new());
+
+    // CSV recovery signals
+    let show_recover_csv = RwSignal::new(false);
+    let recover_csv_text = RwSignal::new(String::new());
+    let recover_csv_status = RwSignal::new(String::new());
 
     let summaries = move || {
         delete_trigger.get(); // subscribe
@@ -140,6 +145,39 @@ pub fn CoachHome() -> impl IntoView {
                     }
                 }
             });
+        }
+    };
+
+    let on_recover_csv = {
+        let ctx = ctx.clone();
+        let navigate = navigate.clone();
+        move |_| {
+            let text = recover_csv_text.get_untracked();
+            if text.trim().is_empty() {
+                recover_csv_status.set("Paste a results CSV to recover.".to_string());
+                return;
+            }
+            match app_core::io::csv::import_results(&text) {
+                Err(e) => {
+                    recover_csv_status.set(format!("CSV error: {e}"));
+                }
+                Ok(imported) => {
+                    let manager =
+                        app_core::session::SessionManager::from_results_csv(&imported);
+                    let session_id = manager
+                        .state
+                        .config
+                        .as_ref()
+                        .map(|c| c.id.to_string())
+                        .unwrap_or_default();
+                    crate::state::save_session(&manager);
+                    ctx.session.set(Some(manager));
+                    navigate(
+                        &format!("/coach/session/{session_id}/matches"),
+                        Default::default(),
+                    );
+                }
+            }
         }
     };
 
@@ -278,7 +316,7 @@ pub fn CoachHome() -> impl IntoView {
                            min-h-[48px]"
                     on:click=move |_| show_recover.update(|v| *v = !*v)
                 >
-                    {move || if show_recover.get() { "▲ Hide Recovery" } else { "▼ Recover Session from Server" }}
+                    {move || if show_recover.get() { "▲ Hide Server Recovery" } else { "▼ Recover Session from Server" }}
                 </button>
 
                 {move || show_recover.get().then(|| view! {
@@ -315,6 +353,49 @@ pub fn CoachHome() -> impl IntoView {
                             class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white \
                                    font-semibold rounded-xl transition-colors min-h-[48px]"
                             on:click=on_recover.clone()
+                        >
+                            "Recover Session"
+                        </button>
+                    </div>
+                })}
+            </div>
+
+            // ── Recover from CSV ──────────────────────────────────────────────
+            <div class="px-4 pb-4">
+                <button
+                    class="w-full py-3 text-sm text-gray-500 hover:text-gray-300 \
+                           border border-dashed border-gray-700 rounded-xl transition-colors \
+                           min-h-[48px]"
+                    on:click=move |_| show_recover_csv.update(|v| *v = !*v)
+                >
+                    {move || if show_recover_csv.get() { "▲ Hide CSV Recovery" } else { "▼ Recover Session from CSV" }}
+                </button>
+
+                {move || show_recover_csv.get().then(|| view! {
+                    <div class="mt-3 bg-gray-900 border border-gray-700/50 rounded-xl p-4 space-y-3">
+                        <p class="text-xs text-gray-400">
+                            "Paste a results CSV exported from a previous session. \
+                             A new session will be created with all players and match \
+                             history loaded in — then use Update Rankings to resume."
+                        </p>
+                        {move || {
+                            let s = recover_csv_status.get();
+                            (!s.is_empty()).then(|| view! {
+                                <p class="text-sm text-red-400">{s}</p>
+                            })
+                        }}
+                        <textarea
+                            placeholder="Paste results CSV here…"
+                            class="w-full h-40 bg-gray-800 border border-gray-600 rounded-lg \
+                                   px-3 py-2 text-white text-xs placeholder-gray-500 font-mono \
+                                   focus:outline-none focus:border-blue-500 resize-y min-h-[44px]"
+                            prop:value=move || recover_csv_text.get()
+                            on:input=move |ev| recover_csv_text.set(event_target_value(&ev))
+                        />
+                        <button
+                            class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white \
+                                   font-semibold rounded-xl transition-colors min-h-[48px]"
+                            on:click=on_recover_csv.clone()
                         >
                             "Recover Session"
                         </button>
