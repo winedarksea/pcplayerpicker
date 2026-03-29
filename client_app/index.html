@@ -3,8 +3,8 @@
 <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <meta name="theme-color" content="#030712"/>
-    <meta name="color-scheme" content="dark"/>
+    <meta name="theme-color" content="#f8fafc"/>
+    <meta name="color-scheme" content="light dark"/>
     <title>PCPlayerPicker | Free and Open-Source Player Ranking</title>
     <meta name="description" content="Free and open-source, offline-first player ranking and Bayesian active-learning match scheduling."/>
     <meta name="robots" content="index,follow"/>
@@ -42,7 +42,18 @@
     <script>
         (function() {
             var mode = localStorage.getItem('pcpp_dark_mode');
-            if (mode !== 'light') {
+            var dark = mode
+                ? mode === 'dark'
+                : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            var themeMeta = document.querySelector("meta[name='theme-color']");
+            if (themeMeta) {
+                themeMeta.setAttribute('content', dark ? '#000000' : '#f8fafc');
+            }
+            var appleMeta = document.querySelector("meta[name='apple-mobile-web-app-status-bar-style']");
+            if (appleMeta) {
+                appleMeta.setAttribute('content', dark ? 'black-translucent' : 'default');
+            }
+            if (dark) {
                 document.documentElement.classList.add('dark');
             }
         })();
@@ -81,9 +92,10 @@
     <link data-trunk rel="css" href="tailwind.css"/>
 
     <style>
-        /* Force dark mode globally — fitness-app style */
-        html { background-color: #030712; }
-        body { color: #f9fafb; }
+        html { background-color: #f8fafc; }
+        html.dark { background-color: #030712; }
+        body { color: #0f172a; }
+        html.dark body { color: #f9fafb; }
     </style>
 </head>
 <body class="font-sans antialiased">

@@ -125,7 +125,7 @@ pub fn AssistantPage() -> impl IntoView {
     });
 
     view! {
-        <div class="min-h-screen bg-gray-950 text-white">
+        <div class="app-theme min-h-screen bg-gray-950 text-white">
             <header class="px-4 pt-6 pb-4 border-b border-gray-800">
                 <div class="flex items-center justify-between gap-3">
                     <div>

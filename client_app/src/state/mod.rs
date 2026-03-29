@@ -37,16 +37,16 @@ fn events_key(id: &str) -> String {
 pub struct AppContext {
     /// The currently-loaded session. `None` when on the home / setup pages.
     pub session: RwSignal<Option<SessionManager>>,
-    /// Dark mode preference — `true` = dark (default).
+    /// Dark mode preference — `true` = dark.
     pub dark_mode: RwSignal<bool>,
 }
 
 impl AppContext {
     pub fn new() -> Self {
-        // Read persisted preference; default to dark.
+        // Read persisted preference; if absent, use system preference.
         let dark = storage_get(DARK_MODE_KEY)
             .map(|v| v != "light")
-            .unwrap_or(true);
+            .unwrap_or_else(system_prefers_dark);
         Self {
             session: RwSignal::new(None),
             dark_mode: RwSignal::new(dark),
@@ -54,9 +54,31 @@ impl AppContext {
     }
 }
 
-/// Persist and apply the dark-mode class to `<html>`.
-pub fn apply_dark_mode(dark: bool) {
-    storage_set(DARK_MODE_KEY, if dark { "dark" } else { "light" });
+fn system_prefers_dark() -> bool {
+    web_sys::window()
+        .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
+        .map(|m| m.matches())
+        .unwrap_or(true)
+}
+
+fn sync_mobile_browser_theme(dark: bool) {
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let Some(doc) = win.document() else {
+        return;
+    };
+
+    if let Ok(Some(meta)) = doc.query_selector("meta[name='theme-color']") {
+        let _ = meta.set_attribute("content", if dark { "#000000" } else { "#f8fafc" });
+    }
+    if let Ok(Some(meta)) = doc.query_selector("meta[name='apple-mobile-web-app-status-bar-style']") {
+        let _ = meta.set_attribute("content", if dark { "black-translucent" } else { "default" });
+    }
+}
+
+/// Apply the dark-mode class to `<html>`.
+pub fn apply_dark_mode_class(dark: bool) {
     if let Some(win) = web_sys::window() {
         if let Some(doc) = win.document() {
             if let Some(root) = doc.document_element() {
@@ -69,6 +91,13 @@ pub fn apply_dark_mode(dark: bool) {
             }
         }
     }
+    sync_mobile_browser_theme(dark);
+}
+
+/// Persist and apply the dark-mode class to `<html>`.
+pub fn apply_dark_mode(dark: bool) {
+    storage_set(DARK_MODE_KEY, if dark { "dark" } else { "light" });
+    apply_dark_mode_class(dark);
 }
 
 // ── localStorage helpers ──────────────────────────────────────────────────────

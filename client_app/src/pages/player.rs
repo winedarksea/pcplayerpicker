@@ -165,7 +165,7 @@ pub fn PlayerPage() -> impl IntoView {
     });
 
     view! {
-        <div class="min-h-screen bg-gray-950 text-white">
+        <div class="app-theme min-h-screen bg-gray-950 text-white">
             <header class="px-4 pt-8 pb-5 text-center">
                 <div class="flex items-center justify-center gap-3">
                     <div>

@@ -7,10 +7,14 @@ use crate::pages::assistant::AssistantPage;
 use crate::pages::coach::{CoachHome, DashboardPage, SetupPage};
 use crate::pages::player::PlayerPage;
 use crate::pages::site::{FaqPage, LandingPage, TutorialPage};
-use crate::state::{apply_dark_mode, restore_sessions_from_idb, restore_sessions_from_opfs, AppContext};
+use crate::state::{
+    apply_dark_mode, apply_dark_mode_class, restore_sessions_from_idb, restore_sessions_from_opfs,
+    AppContext,
+};
 use leptos::prelude::*;
 use leptos_router::{
     components::{Route, Router, Routes},
+    hooks::use_location,
     path,
 };
 
@@ -48,47 +52,50 @@ fn register_service_worker() {
 #[component]
 fn App() -> impl IntoView {
     let ctx = AppContext::new();
-    // Sync dark-mode class on <html> from persisted preference on first render.
-    apply_dark_mode(ctx.dark_mode.get_untracked());
+    // Sync dark-mode class on <html> on first render without overriding preference persistence.
+    apply_dark_mode_class(ctx.dark_mode.get_untracked());
     provide_context(ctx);
 
     view! {
-        <Router>
-            <Routes fallback=|| view! { <NotFound/> }>
-                <Route path=path!("/") view=LandingPage/>
-                <Route path=path!("/tutorial") view=TutorialPage/>
-                <Route path=path!("/faq") view=FaqPage/>
+        <>
+            <Router>
+                <Routes fallback=|| view! { <NotFound/> }>
+                    <Route path=path!("/") view=LandingPage/>
+                    <Route path=path!("/tutorial") view=TutorialPage/>
+                    <Route path=path!("/faq") view=FaqPage/>
 
-                // Coach home — session list
-                <Route path=path!("/coach") view=CoachHome/>
+                    // Coach home — session list
+                    <Route path=path!("/coach") view=CoachHome/>
 
-                // Session setup form
-                <Route path=path!("/coach/setup") view=SetupPage/>
+                    // Session setup form
+                    <Route path=path!("/coach/setup") view=SetupPage/>
 
-                // Session dashboard — default (no tab specified → Matches tab)
-                <Route path=path!("/coach/session/:id") view=DashboardPage/>
+                    // Session dashboard — default (no tab specified → Matches tab)
+                    <Route path=path!("/coach/session/:id") view=DashboardPage/>
 
-                // Session dashboard — explicit tab param
-                // :tab matches "matches" | "results" | "analysis" | "online"
-                <Route path=path!("/coach/session/:id/:tab") view=DashboardPage/>
+                    // Session dashboard — explicit tab param
+                    // :tab matches "matches" | "results" | "analysis" | "online"
+                    <Route path=path!("/coach/session/:id/:tab") view=DashboardPage/>
 
-                // Assistant access via share token
-                <Route path=path!("/a/:token") view=AssistantPage/>
+                    // Assistant access via share token
+                    <Route path=path!("/a/:token") view=AssistantPage/>
 
-                // Player access via share token
-                <Route path=path!("/p/:token") view=PlayerPage/>
+                    // Player access via share token
+                    <Route path=path!("/p/:token") view=PlayerPage/>
 
-                // Catch-all
-                <Route path=path!("/*any") view=NotFound/>
-            </Routes>
-        </Router>
+                    // Catch-all
+                    <Route path=path!("/*any") view=NotFound/>
+                </Routes>
+            </Router>
+            <ThemeToggleFab/>
+        </>
     }
 }
 
 #[component]
 fn NotFound() -> impl IntoView {
     view! {
-        <div class="flex items-center justify-center min-h-screen bg-gray-950">
+        <div class="app-theme flex items-center justify-center min-h-screen bg-gray-950 text-white">
             <div class="text-center">
                 <h1 class="text-5xl font-bold text-white mb-3">"404"</h1>
                 <p class="text-gray-400 mb-6">"Page not found"</p>
@@ -98,6 +105,36 @@ fn NotFound() -> impl IntoView {
                 </a>
             </div>
         </div>
+    }
+}
+
+#[component]
+fn ThemeToggleFab() -> impl IntoView {
+    let ctx = use_context::<AppContext>().expect("AppContext missing");
+    let location = use_location();
+    let dark = ctx.dark_mode;
+    let on_toggle = move |_| {
+        let next = !dark.get();
+        dark.set(next);
+        apply_dark_mode(next);
+    };
+
+    view! {
+        {move || {
+            let path = location.pathname.get();
+            let is_site_page = path == "/" || path == "/tutorial" || path == "/faq";
+            (!is_site_page).then(|| {
+                view! {
+                    <button
+                        on:click=on_toggle
+                        title="Toggle dark/light mode"
+                        class="fixed bottom-4 right-4 z-50 rounded-full border border-white/20 bg-black/75 px-4 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white shadow-lg backdrop-blur transition hover:border-white/40 hover:bg-black/85"
+                    >
+                        {move || if dark.get() { "Light" } else { "Dark" }}
+                    </button>
+                }
+            })
+        }}
     }
 }
 

@@ -74,7 +74,7 @@ pub fn DashboardPage() -> impl IntoView {
     });
 
     view! {
-        <div class="min-h-screen bg-gray-950 text-white flex flex-col">
+        <div class="app-theme min-h-screen bg-gray-950 text-white flex flex-col">
 
             // ── Top bar ───────────────────────────────────────────────────
             <header class="flex items-center gap-3 px-4 pt-5 pb-3">

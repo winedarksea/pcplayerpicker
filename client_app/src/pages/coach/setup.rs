@@ -106,7 +106,7 @@ pub fn SetupPage() -> impl IntoView {
 
     // ── View ──────────────────────────────────────────────────────────────
     view! {
-        <div class="min-h-screen bg-gray-950 text-white">
+        <div class="app-theme min-h-screen bg-gray-950 text-white">
             // ── Nav bar ───────────────────────────────────────────────────
             <div class="flex items-center px-4 pt-6 pb-2 gap-3">
                 <a href="/coach"

@@ -182,7 +182,7 @@ pub fn CoachHome() -> impl IntoView {
     };
 
     view! {
-        <div class="min-h-screen bg-gray-950 flex flex-col">
+        <div class="app-theme min-h-screen bg-gray-950 text-white flex flex-col">
             // ── iOS Home Screen nudge ─────────────────────────────────────────
             {move || show_ios_nudge.get().then(|| view! {
                 <div class="mx-4 mt-4 rounded-xl border border-amber-500/40 bg-amber-950/60 \

@@ -39,7 +39,7 @@ pub fn LandingPage() -> impl IntoView {
     view! {
         <SiteShell>
             <section class="relative overflow-hidden border-b border-white/10">
-                <div class="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(45,212,191,0.18),_transparent_34%),radial-gradient(circle_at_top_right,_rgba(251,191,36,0.12),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.98),_rgba(2,6,23,1))]"></div>
+                <div class="site-hero-backdrop absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(45,212,191,0.18),_transparent_34%),radial-gradient(circle_at_top_right,_rgba(251,191,36,0.12),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.98),_rgba(2,6,23,1))]"></div>
                 <div class="relative mx-auto max-w-6xl px-5 py-16 sm:px-8 sm:py-24">
                     <div class="grid gap-10 lg:grid-cols-[1.3fr_0.9fr] lg:items-center">
                         <div class="max-w-3xl">
@@ -345,7 +345,7 @@ pub fn FaqPage() -> impl IntoView {
 #[component]
 fn SiteShell(children: Children) -> impl IntoView {
     view! {
-        <div class="min-h-screen bg-slate-950 text-white">
+        <div class="site-theme min-h-screen bg-slate-950 text-white">
             <SiteNav/>
             <main>{children()}</main>
             <SiteFooter/>
