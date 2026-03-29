@@ -834,7 +834,7 @@ pub fn ResultsTab() -> impl IntoView {
                         <button
                             class="w-full py-2 text-sm text-gray-500 hover:text-gray-300 \
                                    flex items-center justify-center gap-1.5 transition-colors"
-                            on:click=on_download_results.clone()
+                            on:click=on_download_results
                         >
                             "↓ Download All Results CSV"
                         </button>

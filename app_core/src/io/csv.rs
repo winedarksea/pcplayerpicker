@@ -317,7 +317,7 @@ pub fn export_results(
         players.iter().map(|p| (p.id.0, p.name.as_str())).collect();
 
     // Sort by (round, match_id) for deterministic, human-readable output.
-    let mut sorted_results: Vec<&MatchResult> = results.iter().copied().collect();
+    let mut sorted_results: Vec<&MatchResult> = results.to_vec();
     sorted_results.sort_by_key(|r| {
         let round = matches.get(&r.match_id).map(|m| m.round.0).unwrap_or(0);
         (round, r.match_id.0)

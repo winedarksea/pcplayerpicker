@@ -37,7 +37,7 @@ fn sample_goals(player_idx: usize, teammates: &[usize], opponents: &[usize], rng
         .map(|&j| TRUE_SKILLS[j] * -0.3)
         .sum::<f64>();
     let eta = skill_i + teammate_boost + opp_suppression;
-    let lambda = eta.exp().max(0.05).min(8.0);
+    let lambda = eta.exp().clamp(0.05, 8.0);
 
     // Poisson sample via inverse CDF using the LCG random value in [0,1)
     state = state
