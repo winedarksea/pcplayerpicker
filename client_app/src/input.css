@@ -30,7 +30,6 @@
   html:not(.dark) .site-theme .text-slate-200 { @apply text-slate-700; }
   html:not(.dark) .site-theme .text-slate-300 { @apply text-slate-600; }
   html:not(.dark) .site-theme .text-slate-400 { @apply text-slate-500; }
-  html:not(.dark) .site-theme .text-slate-500 { @apply text-slate-500; }
 
   html:not(.dark) .site-theme .bg-slate-950 { @apply bg-slate-50; }
   html:not(.dark) .site-theme .bg-slate-100 { @apply bg-slate-200; }
