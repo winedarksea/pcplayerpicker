@@ -331,16 +331,23 @@ impl RankingEngine for GoalModelEngine {
                     };
                 };
 
-                let theta_mean = posterior.theta_map[idx];
+                let mut theta_mean = posterior.theta_map[idx];
+                if !theta_mean.is_finite() {
+                    theta_mean = 0.0;
+                }
+                
                 // Widen uncertainty for inactive players: their skill estimate is
                 // "as of last match" and becomes less reliable with time.
                 // A fixed 1.5× multiplier is a conservative first approximation.
                 let base_var = posterior.covariance[(idx, idx)];
-                let theta_var = if player.status == crate::models::PlayerStatus::Inactive {
+                let mut theta_var = if player.status == crate::models::PlayerStatus::Inactive {
                     base_var * 1.5
                 } else {
                     base_var
                 };
+                if !theta_var.is_finite() || theta_var < 0.0 {
+                    theta_var = prior_var;
+                }
 
                 let samples = &rank_samples[idx];
                 let mut sorted_ranks = samples.clone();
@@ -366,8 +373,11 @@ impl RankingEngine for GoalModelEngine {
                     .map(|g| g as u32)
                     .sum();
 
-                let prob_top_k = samples.iter().filter(|&&r| r <= top_k as u32).count() as f64
+                let mut prob_top_k = samples.iter().filter(|&&r| r <= top_k as u32).count() as f64
                     / n_samples as f64;
+                if !prob_top_k.is_finite() {
+                    prob_top_k = 0.0;
+                }
 
                 PlayerRanking {
                     player_id: player.id,

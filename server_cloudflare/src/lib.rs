@@ -147,6 +147,11 @@ fn err_json(msg: &str, status: u16, origin: &str) -> Result<Response> {
     Ok(with_cors(Response::error(msg, status)?, origin))
 }
 
+async fn parse_json_req<T: serde::de::DeserializeOwned>(req: &mut Request) -> std::result::Result<T, String> {
+    let body_text = req.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+    serde_json::from_str(&body_text).map_err(|e| format!("Invalid JSON: {}", e))
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[event(fetch)]
@@ -238,9 +243,9 @@ async fn route_session(req: Request, env: &Env, path: &str, origin: &str) -> Res
 /// Creates session + uploads event log, generates share tokens.
 /// Returns a `coach_key` that must be provided as `X-Coach-Key` for future appends.
 async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Response> {
-    let body: UploadRequest = match req.json().await {
+    let body: UploadRequest = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
     if body.session_id.is_empty() || body.events.is_empty() {
         return err_json("session_id and events required", 400, origin);
@@ -356,9 +361,9 @@ async fn handle_append_events(
 ) -> Result<Response> {
     let coach_key_header = req.headers().get("X-Coach-Key")?.unwrap_or_default();
 
-    let body: AppendRequest = match req.json().await {
+    let body: AppendRequest = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
     if body.events.is_empty() {
         return err_json("events required", 400, origin);
@@ -468,9 +473,9 @@ async fn handle_set_pin(
     struct PinBody {
         pin: String,
     }
-    let body: PinBody = match req.json().await {
+    let body: PinBody = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
     if body.pin.len() < 4 || body.pin.len() > 8 || !body.pin.chars().all(|c| c.is_ascii_digit()) {
         return err_json("PIN must be 4–8 digits", 400, origin);
@@ -518,9 +523,9 @@ async fn handle_recover(
     struct RecoverBody {
         pin: String,
     }
-    let body: RecoverBody = match req.json().await {
+    let body: RecoverBody = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
 
     let db = env.d1("DB")?;
@@ -671,9 +676,9 @@ async fn handle_auth_token(
     struct AuthBody {
         pin: String,
     }
-    let body: AuthBody = match req.json().await {
+    let body: AuthBody = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
 
     let db = env.d1("DB")?;
@@ -737,9 +742,9 @@ async fn handle_set_token_pin(
     struct PinBody {
         pin: String,
     }
-    let body: PinBody = match req.json().await {
+    let body: PinBody = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
 
     // Validate PIN format (4–8 digits) unless clearing
@@ -836,9 +841,9 @@ async fn handle_archive_session(
         final_rankings: Option<serde_json::Value>,
     }
 
-    let body: ArchiveBody = match req.json().await {
+    let body: ArchiveBody = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
 
     let db = env.d1("DB")?;
@@ -925,9 +930,9 @@ async fn handle_heartbeat_post(
         label: Option<String>,
     }
 
-    let body: HeartbeatBody = match req.json().await {
+    let body: HeartbeatBody = match parse_json_req(&mut req).await {
         Ok(b) => b,
-        Err(_) => return err_json("Invalid JSON body", 400, origin),
+        Err(e) => return err_json(&e, 400, origin),
     };
     if body.device_id.is_empty() || body.device_id.len() > 64 {
         return err_json("device_id must be 1–64 characters", 400, origin);

@@ -1,4 +1,4 @@
-const CACHE_NAME = "pcplayerpicker-shell-v4";
+const CACHE_NAME = "pcplayerpicker-shell-v5";
 const APP_SHELL = [
   "/",
   "/manifest.json",
@@ -110,6 +110,11 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/")) {
+    return;
+  }
+  
+  // Do not cache cross-origin requests (e.g., Cloudflare Insights, external APIs)
+  if (url.hostname !== self.location.hostname) {
     return;
   }
 
