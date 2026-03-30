@@ -1,7 +1,6 @@
-const CACHE_NAME = "pcplayerpicker-shell-v2";
+const CACHE_NAME = "pcplayerpicker-shell-v3";
 const APP_SHELL = [
   "/",
-  "/index.html",
   "/manifest.json",
   "/icon.svg",
   "/maskable-icon.svg",
@@ -9,11 +8,45 @@ const APP_SHELL = [
   "/icon-512.png",
 ];
 
+function sanitizeHtmlForCache(html) {
+  return html
+    .replace(
+      /<script\b[^>]*\bsrc=["']https:\/\/static\.cloudflareinsights\.com\/[^"']+["'][^>]*><\/script>/gi,
+      "",
+    )
+    .replace(
+      /<script\b[^>]*\bsrc=["']https:\/\/www\.googletagmanager\.com\/[^"']+["'][^>]*><\/script>/gi,
+      "",
+    );
+}
+
+async function cacheSanitizedIndex(cache, response) {
+  if (!response || !response.ok) return;
+  try {
+    const html = await response.text();
+    const sanitized = sanitizeHtmlForCache(html);
+    await cache.put(
+      "/index.html",
+      new Response(sanitized, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+  } catch (_) {
+    // Best effort: keep runtime working even if shell sanitization fails.
+  }
+}
+
 async function precacheBuildAssets(cache) {
   try {
     const response = await fetch("/index.html", { cache: "no-store" });
     if (!response.ok) return;
-    const html = await response.text();
+    const html = sanitizeHtmlForCache(await response.text());
+    await cache.put(
+      "/index.html",
+      new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
     const regex = /(?:src|href)=["']([^"']+\.(?:wasm|js|css))["']/gi;
     const assets = new Set();
 
@@ -69,8 +102,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/index.html", copy));
+          caches.open(CACHE_NAME).then((cache) => cacheSanitizedIndex(cache, response.clone()));
           return response;
         })
         .catch(async () => {

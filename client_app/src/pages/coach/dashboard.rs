@@ -747,12 +747,8 @@ pub fn ResultsTab() -> impl IntoView {
                 if results.is_empty() {
                     return;
                 }
-                let csv_str = csv::export_results(
-                    &results,
-                    &players,
-                    &manager.state.matches,
-                    config,
-                );
+                let csv_str =
+                    csv::export_results(&results, &players, &manager.state.matches, config);
                 trigger_csv_download(&csv_str, "results.csv");
             });
         }

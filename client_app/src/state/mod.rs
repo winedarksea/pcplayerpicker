@@ -72,8 +72,12 @@ fn sync_mobile_browser_theme(dark: bool) {
     if let Ok(Some(meta)) = doc.query_selector("meta[name='theme-color']") {
         let _ = meta.set_attribute("content", if dark { "#000000" } else { "#f8fafc" });
     }
-    if let Ok(Some(meta)) = doc.query_selector("meta[name='apple-mobile-web-app-status-bar-style']") {
-        let _ = meta.set_attribute("content", if dark { "black-translucent" } else { "default" });
+    if let Ok(Some(meta)) = doc.query_selector("meta[name='apple-mobile-web-app-status-bar-style']")
+    {
+        let _ = meta.set_attribute(
+            "content",
+            if dark { "black-translucent" } else { "default" },
+        );
     }
 }
 

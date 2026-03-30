@@ -313,8 +313,7 @@ pub fn export_results(
         ],
     );
 
-    let name_map: HashMap<u32, &str> =
-        players.iter().map(|p| (p.id.0, p.name.as_str())).collect();
+    let name_map: HashMap<u32, &str> = players.iter().map(|p| (p.id.0, p.name.as_str())).collect();
 
     // Sort by (round, match_id) for deterministic, human-readable output.
     let mut sorted_results: Vec<&MatchResult> = results.to_vec();
@@ -355,8 +354,11 @@ pub fn export_results(
         }
 
         // Fallback: any scored players not present in either team list.
-        let team_ids: std::collections::HashSet<_> =
-            team_a_ids.iter().chain(team_b_ids.iter()).copied().collect();
+        let team_ids: std::collections::HashSet<_> = team_a_ids
+            .iter()
+            .chain(team_b_ids.iter())
+            .copied()
+            .collect();
         for pid in result.scores.keys() {
             if !team_ids.contains(pid) {
                 write_row(&mut out, pid, 0);
@@ -430,8 +432,7 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             col_player = header_index(header, &["player"]).unwrap_or(3);
             col_goals = header_index(header, &["goals"]).unwrap_or(4);
             col_dnp = header_index(header, &["did_not_play", "dnp"]).unwrap_or(5);
-            col_duration =
-                header_index(header, &["duration_multiplier", "duration"]).unwrap_or(6);
+            col_duration = header_index(header, &["duration_multiplier", "duration"]).unwrap_or(6);
             data_start = 1;
         }
     }
@@ -499,9 +500,7 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
     }
 
     if flat.is_empty() && players.is_empty() {
-        return Err(CsvError::Format(
-            "No session data found in CSV".to_string(),
-        ));
+        return Err(CsvError::Format("No session data found in CSV".to_string()));
     }
 
     // Group rows by match_id, preserving insertion order.

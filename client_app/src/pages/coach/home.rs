@@ -1,19 +1,23 @@
 use crate::meta::use_page_meta;
-use crate::state::{delete_session, load_session, load_session_summaries, storage_get, storage_set, AppContext};
+use crate::state::{
+    delete_session, load_session, load_session_summaries, storage_get, storage_set, AppContext,
+};
 use crate::sync::recover_session;
 use app_core::events::EventLog;
 use app_core::session::SessionManager;
+use js_sys::Reflect;
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_navigate;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
-use js_sys::Reflect;
 
 /// Ask the browser to treat storage as persistent (not subject to eviction).
 /// Called when the coach app loads — not on the landing page.
 fn request_persistent_storage() {
-    let Some(window) = web_sys::window() else { return };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
     let storage_mgr = window.navigator().storage();
     if let Ok(promise) = storage_mgr.persist() {
         leptos::task::spawn_local(async move {
@@ -44,8 +48,7 @@ fn should_show_ios_nudge() -> bool {
         return false;
     }
     // Check if already running as standalone (Home Screen install)
-    let standalone = Reflect::get(&nav, &JsValue::from_str("standalone"))
-        .unwrap_or(JsValue::FALSE);
+    let standalone = Reflect::get(&nav, &JsValue::from_str("standalone")).unwrap_or(JsValue::FALSE);
     !standalone.is_truthy()
 }
 
@@ -162,8 +165,7 @@ pub fn CoachHome() -> impl IntoView {
                     recover_csv_status.set(format!("CSV error: {e}"));
                 }
                 Ok(imported) => {
-                    let manager =
-                        app_core::session::SessionManager::from_results_csv(&imported);
+                    let manager = app_core::session::SessionManager::from_results_csv(&imported);
                     let session_id = manager
                         .state
                         .config

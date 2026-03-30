@@ -6,8 +6,8 @@
 use crate::events::{Event, EventLog};
 use crate::io::csv::ImportedResults;
 use crate::models::{
-    MatchId, MatchResult, MatchStatus, Player, PlayerId, PlayerMatchScore, PlayerStatus,
-    Role, RoundNumber, ScheduledMatch, SessionConfig, SessionState, Sport,
+    MatchId, MatchResult, MatchStatus, Player, PlayerId, PlayerMatchScore, PlayerStatus, Role,
+    RoundNumber, ScheduledMatch, SessionConfig, SessionState, Sport,
 };
 use crate::rng::SessionRng;
 

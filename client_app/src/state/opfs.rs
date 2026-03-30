@@ -23,8 +23,8 @@
 
 use js_sys::{Object, Promise, Reflect};
 use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen::JsValue;
+use wasm_bindgen_futures::JsFuture;
 
 const INDEX_FILENAME: &str = "pcpp_index.json";
 
@@ -70,16 +70,11 @@ async fn opfs_write(root: &JsValue, filename: &str, content: &str) -> Option<()>
     let fh = JsFuture::from(fh_promise).await.ok()?;
 
     // fh.createWritable()
-    let create_writable: js_sys::Function =
-        Reflect::get(&fh, &JsValue::from_str("createWritable"))
-            .ok()?
-            .dyn_into()
-            .ok()?;
-    let w_promise: Promise = create_writable
-        .call0(&fh)
+    let create_writable: js_sys::Function = Reflect::get(&fh, &JsValue::from_str("createWritable"))
         .ok()?
         .dyn_into()
         .ok()?;
+    let w_promise: Promise = create_writable.call0(&fh).ok()?.dyn_into().ok()?;
     let w = JsFuture::from(w_promise).await.ok()?;
 
     // w.write(content_string)
@@ -141,14 +136,13 @@ async fn opfs_read(root: &JsValue, filename: &str) -> Option<String> {
 
 /// Delete `filename` from the OPFS root. Silently ignores missing files.
 async fn opfs_delete(root: &JsValue, filename: &str) {
-    let remove: js_sys::Function =
-        match Reflect::get(root, &JsValue::from_str("removeEntry"))
-            .ok()
-            .and_then(|v| v.dyn_into().ok())
-        {
-            Some(f) => f,
-            None => return,
-        };
+    let remove: js_sys::Function = match Reflect::get(root, &JsValue::from_str("removeEntry"))
+        .ok()
+        .and_then(|v| v.dyn_into().ok())
+    {
+        Some(f) => f,
+        None => return,
+    };
     if let Ok(promise) = remove.call1(root, &JsValue::from_str(filename)) {
         if let Ok(promise) = promise.dyn_into::<Promise>() {
             let _ = JsFuture::from(promise).await;

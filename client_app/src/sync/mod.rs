@@ -26,6 +26,9 @@ pub fn api_base() -> String {
         if origin.contains("localhost:8080") {
             return "http://localhost:8787".to_string();
         }
+        if origin == "https://www.pcplayerpicker.com" {
+            return "https://pcplayerpicker.com".to_string();
+        }
         return origin;
     }
     String::new()
@@ -115,7 +118,17 @@ async fn fetch_json(
 ) -> Result<JsValue, String> {
     let opts = RequestInit::new();
     opts.set_method(method);
-    opts.set_mode(RequestMode::Cors);
+    let window = web_sys::window().ok_or("no window")?;
+    let current_origin = window.location().origin().unwrap_or_default();
+    let request_origin = web_sys::Url::new(url)
+        .ok()
+        .map(|parsed| parsed.origin())
+        .unwrap_or_default();
+    if !current_origin.is_empty() && current_origin == request_origin {
+        opts.set_mode(RequestMode::SameOrigin);
+    } else {
+        opts.set_mode(RequestMode::Cors);
+    }
 
     let headers = web_sys::Headers::new().map_err(|e| format!("{e:?}"))?;
     if body.is_some() {
@@ -137,14 +150,27 @@ async fn fetch_json(
     }
 
     let request = Request::new_with_str_and_init(url, &opts).map_err(|e| format!("{e:?}"))?;
-    let window = web_sys::window().ok_or("no window")?;
     let resp_val = JsFuture::from(window.fetch_with_request(&request))
         .await
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| format!("Network error while requesting {url}: {e:?}"))?;
 
     let resp: Response = resp_val.dyn_into().map_err(|_: JsValue| "not a Response")?;
     if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
+        let status = resp.status();
+        let text = match resp.text() {
+            Ok(promise) => JsFuture::from(promise)
+                .await
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+        let text = text.trim();
+        return if text.is_empty() {
+            Err(format!("HTTP {status} from {url}"))
+        } else {
+            Err(format!("HTTP {status} from {url}: {text}"))
+        };
     }
 
     let json_promise = resp.json().map_err(|e| format!("{e:?}"))?;
