@@ -20,8 +20,7 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
 /// The base API URL. In production this is the same origin; during local dev
 /// it points to the wrangler dev server.
 pub fn api_base() -> String {
-    if let Some(window) = web_sys::window() {
-        let origin = window.location().origin().unwrap_or_default();
+    if let Some(origin) = browser_origin() {
         // If running on localhost:8080 (trunk serve), hit wrangler on 8787
         if origin.contains("localhost:8080") {
             return "http://localhost:8787".to_string();
@@ -32,6 +31,20 @@ pub fn api_base() -> String {
         return origin;
     }
     String::new()
+}
+
+/// Read the current browser origin without calling throwing web-sys getters.
+///
+/// Some browsers can reject direct `window.location.origin` access during app
+/// startup or after restoring older persisted sessions, which turns into a wasm
+/// trap in release builds. Reflection keeps that failure recoverable and lets
+/// sync degrade instead of taking down the whole app shell.
+fn browser_origin() -> Option<String> {
+    let window = web_sys::window()?;
+    js_sys::Reflect::get(&window.location(), &JsValue::from_str("origin"))
+        .ok()
+        .and_then(|value| value.as_string())
+        .filter(|origin| !origin.is_empty())
 }
 
 // ── Persistent sync state (stored in localStorage) ───────────────────────────
@@ -119,7 +132,7 @@ async fn fetch_json(
     let opts = RequestInit::new();
     opts.set_method(method);
     let window = web_sys::window().ok_or("no window")?;
-    let current_origin = window.location().origin().unwrap_or_default();
+    let current_origin = browser_origin().unwrap_or_default();
     let request_origin = web_sys::Url::new(url)
         .ok()
         .map(|parsed| parsed.origin())

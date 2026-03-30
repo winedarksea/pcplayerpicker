@@ -1,4 +1,4 @@
-const CACHE_NAME = "pcplayerpicker-shell-v3";
+const CACHE_NAME = "pcplayerpicker-shell-v4";
 const APP_SHELL = [
   "/",
   "/manifest.json",
@@ -34,6 +34,21 @@ async function cacheSanitizedIndex(cache, response) {
   } catch (_) {
     // Best effort: keep runtime working even if shell sanitization fails.
   }
+}
+
+async function cachedNavigationResponse() {
+  const cachedIndex = await caches.match("/index.html");
+  if (cachedIndex) {
+    return cachedIndex;
+  }
+  const cachedRoot = await caches.match("/");
+  if (cachedRoot) {
+    return cachedRoot;
+  }
+  return new Response("Offline", {
+    status: 503,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
 }
 
 async function precacheBuildAssets(cache) {
@@ -102,13 +117,13 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
+          if (!response.ok) {
+            return cachedNavigationResponse();
+          }
           caches.open(CACHE_NAME).then((cache) => cacheSanitizedIndex(cache, response.clone()));
           return response;
         })
-        .catch(async () => {
-          const cached = await caches.match("/index.html");
-          return cached || caches.match("/");
-        }),
+        .catch(() => cachedNavigationResponse()),
     );
     return;
   }
