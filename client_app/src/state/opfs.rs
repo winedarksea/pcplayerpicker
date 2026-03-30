@@ -6,9 +6,9 @@
 //! origin is granted persistent storage.
 //!
 //! Strategy:
-//!   - Every `save_session()` writes to localStorage → IDB → OPFS (all three).
+//!   - Every `save_session()` writes the full event log to IDB and OPFS.
 //!   - `restore_sessions_from_opfs()` is called once at startup after IDB
-//!     restore. It recovers any sessions that IDB also lost (edge case).
+//!     restore. It recovers any session ids/summaries that IDB also lost.
 //!   - `delete_from_opfs()` is called on explicit session delete.
 //!
 //! Data layout in the OPFS root directory:
@@ -17,8 +17,8 @@
 //!
 //! All operations are async and spawned via `leptos::task::spawn_local`.
 //! Browsers that don't support OPFS (Safari < 16.4, older Chromium) return
-//! None from `get_opfs_root()` and degrade silently — localStorage + IDB
-//! remain the active layers.
+//! None from `get_opfs_root()` and degrade silently — IDB remains the active
+//! durable layer.
 
 use js_sys::{Object, Promise, Reflect};
 use wasm_bindgen::JsCast;

@@ -57,10 +57,14 @@ pub fn DashboardPage() -> impl IntoView {
         })
     };
 
-    // Load from localStorage if the context session doesn't match this URL
+    // Load from durable browser storage if the context session doesn't match this URL.
     Effect::new(move |_| {
         ctx.storage_restore_epoch.get();
         let id = params.with(|p| p.get("id").unwrap_or_default());
+        if id.is_empty() {
+            ctx.session.set(None);
+            return;
+        }
         let needs_load = ctx.session.with(|s| {
             s.as_ref()
                 .and_then(|m| m.state.config.as_ref())
@@ -68,9 +72,12 @@ pub fn DashboardPage() -> impl IntoView {
                 .unwrap_or(true)
         });
         if needs_load {
-            if let Some(manager) = load_session(&id) {
-                ctx.session.set(Some(manager));
-            }
+            ctx.session.set(None);
+            leptos::task::spawn_local(async move {
+                if let Some(manager) = load_session(&id).await {
+                    ctx.session.set(Some(manager));
+                }
+            });
         }
     });
 
@@ -1025,7 +1032,7 @@ pub fn AnalysisTab() -> impl IntoView {
                                         ratings.sort_by(|a, b| b.attack.rating.partial_cmp(&a.attack.rating)
                                             .unwrap_or(std::cmp::Ordering::Equal));
                                         view! {
-                                            <div class="overflow-x-auto -mx-4 px-4">
+                                            <div class="content-auto-table overflow-x-auto -mx-4 px-4">
                                                 <table class="w-full text-sm min-w-[360px]">
                                                     <thead>
                                                         <tr class="text-gray-500 text-xs uppercase \
@@ -1395,7 +1402,7 @@ fn OverallTable(
     player_map: HashMap<PlayerId, app_core::models::Player>,
 ) -> impl IntoView {
     view! {
-        <div class="overflow-x-auto -mx-4 px-4">
+        <div class="content-auto-table overflow-x-auto -mx-4 px-4">
             <table class="w-full text-sm min-w-[380px]">
                 <thead>
                     <tr class="text-gray-500 text-xs uppercase tracking-wide border-b border-gray-700/50">
@@ -1729,8 +1736,8 @@ pub fn PlayersTab() -> impl IntoView {
                                 (r.rank, r.matches_played, r.total_goals)
                             });
                             view! {
-                                <div class="bg-gray-900 border border-gray-700/50 rounded-xl \
-                                            px-4 py-3 flex items-center gap-3">
+                                <div class="content-auto-card bg-gray-900 border border-gray-700/50 \
+                                            rounded-xl px-4 py-3 flex items-center gap-3">
                                     // Status dot
                                     <span class=move || format!(
                                         "w-2.5 h-2.5 rounded-full shrink-0 {}",

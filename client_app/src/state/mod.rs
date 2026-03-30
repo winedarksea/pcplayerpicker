@@ -1,17 +1,17 @@
-//! App-wide reactive state and localStorage persistence.
+//! App-wide reactive state and durable browser persistence.
 //!
 //! The source of truth is the `EventLog` inside `SessionManager`. All UI
 //! components read derived `SessionState` reactively through the `AppContext`.
-//! Whenever the `SessionManager` signal changes, an `Effect` persists the full
-//! event log to localStorage.
+//! Full session event logs are stored in IDB and OPFS. localStorage is only
+//! used for small synchronous metadata like preferences, the session index, and
+//! session summaries.
 //!
 //! localStorage layout:
 //!   `pcpp_sessions`           → JSON Vec<String>  (session UUID list)
-//!   `pcpp_events_{uuid}`      → JSON Vec<EventEnvelope>
+//!   `pcpp_summary_{uuid}`     → JSON SessionSummary
 //!
-//! Every write also fires background IDB and OPFS writes. On app startup,
-//! restore tasks repopulate localStorage from those slower backup layers before
-//! the rest of the UI relies on it.
+//! On app startup, restore tasks rebuild the localStorage session index and
+//! summary cache from IDB/OPFS before the rest of the UI relies on it.
 
 pub mod idb;
 pub mod opfs;
@@ -26,8 +26,8 @@ use serde::{Deserialize, Serialize};
 const SESSION_LIST_KEY: &str = "pcpp_sessions";
 const DARK_MODE_KEY: &str = "pcpp_dark_mode";
 
-fn events_key(id: &str) -> String {
-    format!("pcpp_events_{id}")
+fn summary_key(id: &str) -> String {
+    format!("pcpp_summary_{id}")
 }
 
 // ── App context ───────────────────────────────────────────────────────────────
@@ -155,7 +155,8 @@ pub fn get_or_create_device_id() -> String {
 
 // ── Session persistence ───────────────────────────────────────────────────────
 
-/// Persist the event log for a session to localStorage and (async) to IDB.
+/// Persist the event log for a session to IDB and OPFS, while keeping only
+/// lightweight metadata in localStorage.
 pub fn save_session(manager: &SessionManager) {
     let config = match &manager.state.config {
         Some(c) => c,
@@ -164,14 +165,16 @@ pub fn save_session(manager: &SessionManager) {
     let id = config.id.to_string();
 
     if let Ok(json) = serde_json::to_string(manager.log.all()) {
-        storage_set(&events_key(&id), &json);
-        // Async backups — fire and forget, failures are non-fatal.
-        // IDB and OPFS are the colder recovery layers; localStorage remains the hot path.
+        // Async durable writes — fire and forget, failures are non-fatal.
         idb::save_to_idb(id.clone(), json.clone());
         opfs::save_to_opfs(id.clone(), json);
     }
 
-    // Add to session list if not already present
+    if let Some(summary) = session_summary_from_manager(manager) {
+        save_summary_cache(&summary);
+    }
+
+    // Add to session list if not already present.
     let mut ids = load_session_ids();
     if !ids.contains(&id) {
         ids.push(id);
@@ -181,18 +184,67 @@ pub fn save_session(manager: &SessionManager) {
     }
 }
 
-/// Load a `SessionManager` from localStorage by UUID string.
-/// Returns `None` if the session does not exist.
-pub fn load_session(id: &str) -> Option<SessionManager> {
-    let json = storage_get(&events_key(id))?;
-    let envelopes = serde_json::from_str(&json).ok()?;
+fn parse_session_manager(events_json: &str) -> Option<SessionManager> {
+    let envelopes = serde_json::from_str(events_json).ok()?;
     let log = EventLog::from_saved(envelopes);
     Some(SessionManager::from_log(log))
 }
 
-/// Delete a session from localStorage and IDB.
+fn save_summary_cache(summary: &SessionSummary) {
+    if let Ok(json) = serde_json::to_string(summary) {
+        storage_set(&summary_key(&summary.id), &json);
+    }
+}
+
+fn latest_session_version(manager: &SessionManager) -> u64 {
+    manager
+        .log
+        .all()
+        .last()
+        .map(|event| event.session_version)
+        .unwrap_or(0)
+}
+
+fn choose_fresher_session(
+    left: Option<SessionManager>,
+    right: Option<SessionManager>,
+) -> Option<SessionManager> {
+    match (left, right) {
+        (Some(a), Some(b)) => {
+            if latest_session_version(&a) >= latest_session_version(&b) {
+                Some(a)
+            } else {
+                Some(b)
+            }
+        }
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+/// Load a `SessionManager` from durable browser storage by UUID string.
+/// Returns `None` if the session does not exist in either IDB or OPFS.
+pub async fn load_session(id: &str) -> Option<SessionManager> {
+    let idb_manager = idb::load_from_idb(id)
+        .await
+        .as_deref()
+        .and_then(parse_session_manager);
+    let opfs_manager = opfs::load_from_opfs(id)
+        .await
+        .as_deref()
+        .and_then(parse_session_manager);
+
+    let manager = choose_fresher_session(idb_manager, opfs_manager)?;
+    if let Some(summary) = session_summary_from_manager(&manager) {
+        save_summary_cache(&summary);
+    }
+    Some(manager)
+}
+
+/// Delete a session from localStorage metadata, IDB, and OPFS.
 pub fn delete_session(id: &str) {
-    storage_remove(&events_key(id));
+    storage_remove(&summary_key(id));
     let mut ids = load_session_ids();
     ids.retain(|i| i != id);
     if let Ok(json) = serde_json::to_string(&ids) {
@@ -202,28 +254,33 @@ pub fn delete_session(id: &str) {
     opfs::delete_from_opfs(id.to_string());
 }
 
-/// Recover sessions from IDB that were evicted from localStorage.
+/// Recover session ids and summaries from IDB when localStorage metadata was
+/// evicted.
 ///
-/// Called once at app startup. If IDB contains event logs for sessions that
-/// localStorage no longer has (e.g. after Safari's storage eviction), they are
-/// copied back into localStorage so the rest of the app sees them normally.
+/// Called once at app startup. If IDB contains sessions that localStorage no
+/// longer knows about, rebuild the local metadata cache so the rest of the app
+/// sees them normally.
 pub async fn restore_sessions_from_idb() {
     let idb_ids = idb::load_ids_from_idb().await;
     if idb_ids.is_empty() {
         return;
     }
     let local_ids = load_session_ids();
-    let missing: Vec<String> = idb_ids
+    let needs_metadata: Vec<String> = idb_ids
         .into_iter()
-        .filter(|id| !local_ids.contains(id))
+        .filter(|id| !local_ids.contains(id) || storage_get(&summary_key(id)).is_none())
         .collect();
-    if missing.is_empty() {
+    if needs_metadata.is_empty() {
         return;
     }
     let mut ids = local_ids;
-    for id in missing {
+    for id in needs_metadata {
         if let Some(events_json) = idb::load_from_idb(&id).await {
-            storage_set(&events_key(&id), &events_json);
+            if let Some(manager) = parse_session_manager(&events_json) {
+                if let Some(summary) = session_summary_from_manager(&manager) {
+                    save_summary_cache(&summary);
+                }
+            }
             if !ids.contains(&id) {
                 ids.push(id);
             }
@@ -234,28 +291,33 @@ pub async fn restore_sessions_from_idb() {
     }
 }
 
-/// Recover sessions from OPFS that were evicted from both localStorage and IDB.
+/// Recover session ids and summaries from OPFS that were evicted from both
+/// localStorage and IDB.
 ///
 /// Called once at startup after `restore_sessions_from_idb()`. OPFS is a
-/// secondary recovery layer for session logs, but localStorage stays the
-/// synchronous read path for the live UI.
+/// secondary recovery layer for session logs, while localStorage only keeps the
+/// synchronous metadata cache.
 pub async fn restore_sessions_from_opfs() {
     let opfs_ids = opfs::load_ids_from_opfs().await;
     if opfs_ids.is_empty() {
         return;
     }
     let local_ids = load_session_ids();
-    let missing: Vec<String> = opfs_ids
+    let needs_metadata: Vec<String> = opfs_ids
         .into_iter()
-        .filter(|id| !local_ids.contains(id))
+        .filter(|id| !local_ids.contains(id) || storage_get(&summary_key(id)).is_none())
         .collect();
-    if missing.is_empty() {
+    if needs_metadata.is_empty() {
         return;
     }
     let mut ids = local_ids;
-    for id in missing {
+    for id in needs_metadata {
         if let Some(events_json) = opfs::load_from_opfs(&id).await {
-            storage_set(&events_key(&id), &events_json);
+            if let Some(manager) = parse_session_manager(&events_json) {
+                if let Some(summary) = session_summary_from_manager(&manager) {
+                    save_summary_cache(&summary);
+                }
+            }
             if !ids.contains(&id) {
                 ids.push(id);
             }
@@ -286,22 +348,24 @@ pub struct SessionSummary {
     pub created_at: String,
 }
 
-/// Read summaries for all stored sessions (loads and materialises each log).
+fn session_summary_from_manager(manager: &SessionManager) -> Option<SessionSummary> {
+    let config = manager.state.config.as_ref()?;
+    Some(SessionSummary {
+        id: config.id.to_string(),
+        sport: config.sport.to_string(),
+        team_size: config.team_size,
+        player_count: manager.state.players.len(),
+        rounds_played: manager.state.current_round.0.saturating_sub(1),
+        created_at: config.created_at.format("%Y-%m-%d %H:%M").to_string(),
+    })
+}
+
+/// Read summaries for all stored sessions from the localStorage metadata cache.
 pub fn load_session_summaries() -> Vec<SessionSummary> {
     load_session_ids()
         .iter()
-        .filter_map(|id| {
-            let manager = load_session(id)?;
-            let config = manager.state.config.as_ref()?;
-            Some(SessionSummary {
-                id: id.clone(),
-                sport: config.sport.to_string(),
-                team_size: config.team_size,
-                player_count: manager.state.players.len(),
-                rounds_played: manager.state.current_round.0.saturating_sub(1),
-                created_at: config.created_at.format("%Y-%m-%d %H:%M").to_string(),
-            })
-        })
+        .filter_map(|id| storage_get(&summary_key(id)))
+        .filter_map(|json| serde_json::from_str(&json).ok())
         .rev() // newest first
         .collect()
 }

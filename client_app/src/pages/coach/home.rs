@@ -1,6 +1,6 @@
 use crate::meta::use_page_meta;
 use crate::state::{
-    delete_session, load_session, load_session_summaries, storage_get, storage_set, AppContext,
+    delete_session, load_session_summaries, storage_get, storage_set, AppContext,
 };
 use crate::sync::recover_session;
 use app_core::events::EventLog;
@@ -98,10 +98,8 @@ pub fn CoachHome() -> impl IntoView {
         let ctx = ctx.clone();
         let navigate = navigate.clone();
         move |id: String| {
-            if let Some(manager) = load_session(&id) {
-                ctx.session.set(Some(manager));
-                navigate(&format!("/coach/session/{id}/matches"), Default::default());
-            }
+            ctx.session.set(None);
+            navigate(&format!("/coach/session/{id}/matches"), Default::default());
         }
     };
 
@@ -275,8 +273,8 @@ pub fn CoachHome() -> impl IntoView {
                                         let id_del    = s.id.clone();
                                         let on_resume = on_resume.clone();
                                         view! {
-                                            <li class="bg-gray-900 border border-gray-700/50 \
-                                                       rounded-xl overflow-hidden">
+                                            <li class="content-auto-card bg-gray-900 border \
+                                                       border-gray-700/50 rounded-xl overflow-hidden">
                                                 <button
                                                     class="w-full text-left px-4 py-4 \
                                                            hover:bg-gray-800 transition-colors \

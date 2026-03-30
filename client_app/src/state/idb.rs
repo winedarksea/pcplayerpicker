@@ -7,15 +7,15 @@
 //! localStorage.
 //!
 //! Strategy:
-//! - Every `save_session()` also writes a copy to IDB (fire-and-forget).
+//! - Every `save_session()` writes the full event log to IDB (fire-and-forget).
 //! - `restore_sessions_from_idb()` is called once at app startup: it scans IDB
-//!   for session IDs that are missing from localStorage and copies them back.
-//!   This silently recovers data lost to storage eviction.
+//!   for session IDs that are missing from localStorage metadata and rebuilds
+//!   their summary/index cache. This silently recovers data lost to metadata
+//!   eviction.
 //! - `delete_from_idb()` removes a session from IDB on explicit delete.
 //!
 //! All IDB operations are async and spawned via `leptos::task::spawn_local`.
-//! They never block the UI and failures are silently ignored — localStorage
-//! remains the primary hot path.
+//! They never block the UI and failures are silently ignored.
 
 use js_sys::{Array, Promise};
 use wasm_bindgen::prelude::*;

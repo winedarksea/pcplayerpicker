@@ -62,7 +62,7 @@ jobs:
 
       - name: Build client WASM (release)
         working-directory: client_app
-        run: trunk build --release
+        run: trunk build --release --cargo-profile client-release
 
       - name: Build Worker (release)
         working-directory: server_cloudflare

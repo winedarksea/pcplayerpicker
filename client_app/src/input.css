@@ -3,6 +3,16 @@
 @tailwind utilities;
 
 @layer components {
+  .content-auto-card {
+    content-visibility: auto;
+    contain-intrinsic-size: 120px;
+  }
+
+  .content-auto-table {
+    content-visibility: auto;
+    contain-intrinsic-size: 360px;
+  }
+
   /* Section heading used across coach setup and dashboard */
   .section-label {
     @apply text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3;

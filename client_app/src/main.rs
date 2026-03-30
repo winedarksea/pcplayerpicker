@@ -19,6 +19,7 @@ use leptos_router::{
 };
 
 fn main() {
+    #[cfg(debug_assertions)]
     console_error_panic_hook::set_once();
     pre_mount_init();
     leptos::mount::mount_to_body(App);

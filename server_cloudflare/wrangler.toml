@@ -11,7 +11,7 @@ routes = [
 
 # Build the Worker using worker-build (wraps wasm-pack for Workers target)
 [build]
-command = "cd ../client_app && trunk build --release && cd ../server_cloudflare && cargo install -q \"worker-build@^0.7\" && worker-build --release"
+command = "cd ../client_app && trunk build --release --cargo-profile client-release && cd ../server_cloudflare && cargo install -q \"worker-build@^0.7\" && worker-build --release"
 
 # Serve the compiled client_app WASM bundle as static assets.
 # These are served by Cloudflare's CDN, not the Worker — zero CPU cost.
