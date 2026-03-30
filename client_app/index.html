@@ -39,23 +39,26 @@
     </script>
 
     <!-- Apply dark/light class before first paint to avoid flash -->
+    <!-- try/catch: iOS Safari throws SecurityError on localStorage when "Block All Cookies" is on -->
     <script>
         (function() {
-            var mode = localStorage.getItem('pcpp_dark_mode');
-            var dark = mode
-                ? mode === 'dark'
-                : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-            var themeMeta = document.querySelector("meta[name='theme-color']");
-            if (themeMeta) {
-                themeMeta.setAttribute('content', dark ? '#000000' : '#f8fafc');
-            }
-            var appleMeta = document.querySelector("meta[name='apple-mobile-web-app-status-bar-style']");
-            if (appleMeta) {
-                appleMeta.setAttribute('content', dark ? 'black-translucent' : 'default');
-            }
-            if (dark) {
-                document.documentElement.classList.add('dark');
-            }
+            try {
+                var mode = localStorage.getItem('pcpp_dark_mode');
+                var dark = mode
+                    ? mode === 'dark'
+                    : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                var themeMeta = document.querySelector("meta[name='theme-color']");
+                if (themeMeta) {
+                    themeMeta.setAttribute('content', dark ? '#000000' : '#f8fafc');
+                }
+                var appleMeta = document.querySelector("meta[name='apple-mobile-web-app-status-bar-style']");
+                if (appleMeta) {
+                    appleMeta.setAttribute('content', dark ? 'black-translucent' : 'default');
+                }
+                if (dark) {
+                    document.documentElement.classList.add('dark');
+                }
+            } catch (_) {}
         })();
     </script>
 
