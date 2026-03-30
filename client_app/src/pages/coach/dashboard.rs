@@ -1479,7 +1479,7 @@ fn SynergyHeatmap(names: Vec<String>, matrix: Vec<Vec<f64>>) -> impl IntoView {
 
     let cell = 28i32;
     let label_w = 70i32;
-    let label_h = 50i32; // top labels rotated
+    let label_h = 64i32; // rotated top labels need extra clearance from the first data row
     let svg_w = label_w + n as i32 * cell;
     let svg_h = label_h + n as i32 * cell;
 
@@ -1515,22 +1515,6 @@ fn SynergyHeatmap(names: Vec<String>, matrix: Vec<Vec<f64>>) -> impl IntoView {
                 style=format!("width:100%; max-width:{}px; height:auto; display:block;",
                     svg_w.max(200))
             >
-                // Column labels (top, rotated)
-                {(0..n).map(|j| {
-                    let x = label_w + j as i32 * cell + cell / 2;
-                    let name: String = names[j].chars().take(8).collect();
-                    view! {
-                        <text
-                            x=x
-                            y=label_h - 4
-                            font-size="8"
-                            fill="#9ca3af"
-                            text-anchor="end"
-                            transform=format!("rotate(-45,{x},{})", label_h - 4)
-                        >{name}</text>
-                    }
-                }).collect_view()}
-
                 // Row labels (left) + cells
                 {(0..n).map(|i| {
                     let y_top = label_h + i as i32 * cell;
@@ -1565,6 +1549,22 @@ fn SynergyHeatmap(names: Vec<String>, matrix: Vec<Vec<f64>>) -> impl IntoView {
                                 }
                             }).collect_view()}
                         </g>
+                    }
+                }).collect_view()}
+
+                // Render column labels after the cells so long names are not hidden by the matrix.
+                {(0..n).map(|j| {
+                    let x = label_w + j as i32 * cell + cell / 2;
+                    let name: String = names[j].chars().take(8).collect();
+                    view! {
+                        <text
+                            x=x
+                            y=label_h - 8
+                            font-size="8"
+                            fill="#9ca3af"
+                            text-anchor="end"
+                            transform=format!("rotate(-45,{x},{})", label_h - 8)
+                        >{name}</text>
                     }
                 }).collect_view()}
             </svg>

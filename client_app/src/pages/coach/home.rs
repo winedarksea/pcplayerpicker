@@ -9,6 +9,7 @@ use js_sys::Reflect;
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_navigate;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 
@@ -86,6 +87,7 @@ pub fn CoachHome() -> impl IntoView {
     let show_recover_csv = RwSignal::new(false);
     let recover_csv_text = RwSignal::new(String::new());
     let recover_csv_status = RwSignal::new(String::new());
+    let recover_csv_selected_filename = RwSignal::new(String::new());
 
     let summaries = move || {
         delete_trigger.get(); // subscribe
@@ -179,6 +181,47 @@ pub fn CoachHome() -> impl IntoView {
                     );
                 }
             }
+        }
+    };
+
+    let on_select_recovery_csv_file = {
+        move |ev: web_sys::Event| {
+            let Some(input) = ev
+                .target()
+                .and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
+            else {
+                recover_csv_status.set("Could not read the selected file input.".to_string());
+                return;
+            };
+
+            let Some(files) = input.files() else {
+                recover_csv_selected_filename.set(String::new());
+                return;
+            };
+
+            let Some(file) = files.get(0) else {
+                recover_csv_selected_filename.set(String::new());
+                return;
+            };
+
+            let filename = file.name();
+            recover_csv_selected_filename.set(filename.clone());
+            recover_csv_status.set(format!("Loading {filename}…"));
+
+            let recover_csv_text = recover_csv_text;
+            let recover_csv_status = recover_csv_status;
+            leptos::task::spawn_local(async move {
+                match JsFuture::from(file.text()).await {
+                    Ok(text_value) => {
+                        let text = text_value.as_string().unwrap_or_default();
+                        recover_csv_text.set(text);
+                        recover_csv_status.set("CSV file loaded. Review or recover when ready.".to_string());
+                    }
+                    Err(_) => {
+                        recover_csv_status.set("Failed to read the selected CSV file.".to_string());
+                    }
+                }
+            });
         }
     };
 
@@ -384,7 +427,8 @@ pub fn CoachHome() -> impl IntoView {
                 {move || show_recover_csv.get().then(|| view! {
                     <div class="mt-3 bg-gray-900 border border-gray-700/50 rounded-xl p-4 space-y-3">
                         <p class="text-xs text-gray-400">
-                            "Paste a results CSV exported from a previous session. \
+                            "Paste a results CSV exported from a previous session, or choose \
+                             a `.csv` file. \
                              A new session will be created with all players and match \
                              history loaded in — then use Update Rankings to resume."
                         </p>
@@ -402,6 +446,27 @@ pub fn CoachHome() -> impl IntoView {
                             prop:value=move || recover_csv_text.get()
                             on:input=move |ev| recover_csv_text.set(event_target_value(&ev))
                         />
+                        <div class="space-y-2">
+                            <label
+                                class="flex items-center justify-center w-full min-h-[44px] px-3 py-2 \
+                                       bg-gray-800 hover:bg-gray-700 text-sm text-white rounded-lg \
+                                       border border-gray-600 transition-colors cursor-pointer"
+                            >
+                                <input
+                                    type="file"
+                                    accept=".csv,text/csv"
+                                    class="hidden"
+                                    on:change=on_select_recovery_csv_file
+                                />
+                                "Choose CSV File"
+                            </label>
+                            {move || {
+                                let filename = recover_csv_selected_filename.get();
+                                (!filename.is_empty()).then(|| view! {
+                                    <p class="text-xs text-gray-500">"Selected file: "{filename}</p>
+                                })
+                            }}
+                        </div>
                         <button
                             class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white \
                                    font-semibold rounded-xl transition-colors min-h-[48px]"

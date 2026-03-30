@@ -44,6 +44,9 @@ web-sys = { version = "0.3", features = [
     "Clipboard",
     "Blob",
     "BlobPropertyBag",
+    "File",
+    "FileList",
+    "HtmlInputElement",
     "Url",
     # IndexedDB — used for durable session backup alongside localStorage
     "IdbFactory",
