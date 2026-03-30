@@ -9,9 +9,9 @@
 //!   `pcpp_sessions`           → JSON Vec<String>  (session UUID list)
 //!   `pcpp_events_{uuid}`      → JSON Vec<EventEnvelope>
 //!
-//! Every write also fires a background IDB write (see `state::idb`). On app
-//! startup, `restore_sessions_from_idb()` recovers any sessions that were
-//! evicted from localStorage by the browser (common on iOS/Safari).
+//! Every write also fires background IDB and OPFS writes. On app startup,
+//! restore tasks repopulate localStorage from those slower backup layers before
+//! the rest of the UI relies on it.
 
 pub mod idb;
 pub mod opfs;
@@ -39,6 +39,10 @@ pub struct AppContext {
     pub session: RwSignal<Option<SessionManager>>,
     /// Dark mode preference — `true` = dark.
     pub dark_mode: RwSignal<bool>,
+    /// True while startup restore is scanning IDB/OPFS and repopulating localStorage.
+    pub storage_restore_in_progress: RwSignal<bool>,
+    /// Incremented after a restore pass so pages can re-read local storage.
+    pub storage_restore_epoch: RwSignal<u32>,
 }
 
 impl AppContext {
@@ -50,6 +54,8 @@ impl AppContext {
         Self {
             session: RwSignal::new(None),
             dark_mode: RwSignal::new(dark),
+            storage_restore_in_progress: RwSignal::new(false),
+            storage_restore_epoch: RwSignal::new(0),
         }
     }
 }
@@ -160,8 +166,7 @@ pub fn save_session(manager: &SessionManager) {
     if let Ok(json) = serde_json::to_string(manager.log.all()) {
         storage_set(&events_key(&id), &json);
         // Async backups — fire and forget, failures are non-fatal.
-        // IDB: evicted less aggressively than localStorage even without persist().
-        // OPFS: truly persistent on Safari 16.4+ regardless of Home Screen status.
+        // IDB and OPFS are the colder recovery layers; localStorage remains the hot path.
         idb::save_to_idb(id.clone(), json.clone());
         opfs::save_to_opfs(id.clone(), json);
     }
@@ -231,10 +236,9 @@ pub async fn restore_sessions_from_idb() {
 
 /// Recover sessions from OPFS that were evicted from both localStorage and IDB.
 ///
-/// Called once at startup after `restore_sessions_from_idb()`. OPFS files are
-/// not subject to Safari's 7-day eviction cap, so this recovers data that both
-/// localStorage and IDB lost on devices that have not added the PWA to their
-/// Home Screen.
+/// Called once at startup after `restore_sessions_from_idb()`. OPFS is a
+/// secondary recovery layer for session logs, but localStorage stays the
+/// synchronous read path for the live UI.
 pub async fn restore_sessions_from_opfs() {
     let opfs_ids = opfs::load_ids_from_opfs().await;
     if opfs_ids.is_empty() {

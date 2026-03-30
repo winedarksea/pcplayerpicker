@@ -89,6 +89,7 @@ pub fn CoachHome() -> impl IntoView {
 
     let summaries = move || {
         delete_trigger.get(); // subscribe
+        ctx.storage_restore_epoch.get(); // subscribe to startup restore completion
         load_session_summaries()
     };
 
@@ -241,13 +242,22 @@ pub fn CoachHome() -> impl IntoView {
             // ── Session list ──────────────────────────────────────────────────
             <div class="px-4 flex-1">
                 {move || {
+                    let restoring = ctx.storage_restore_in_progress.get();
                     let sessions = summaries();
                     if sessions.is_empty() {
                         view! {
                             <div class="text-center py-16 text-gray-500">
                                 <p class="text-4xl mb-3">"📋"</p>
-                                <p class="font-medium">"No sessions yet"</p>
-                                <p class="text-sm mt-1">"Tap + New Session to get started"</p>
+                                <p class="font-medium">
+                                    {if restoring { "Checking local sessions…" } else { "No sessions yet" }}
+                                </p>
+                                <p class="text-sm mt-1">
+                                    {if restoring {
+                                        "Recovering backups from browser storage."
+                                    } else {
+                                        "Tap + New Session to get started"
+                                    }}
+                                </p>
                             </div>
                         }.into_any()
                     } else {

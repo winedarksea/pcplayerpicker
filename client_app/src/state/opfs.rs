@@ -1,10 +1,9 @@
 //! OPFS (Origin Private File System) storage for session event logs.
 //!
-//! Safari 16.4+ (iOS/macOS) supports OPFS and treats files written there as
-//! truly persistent app data — NOT subject to the 7-day eviction cap that
-//! applies to localStorage and IndexedDB when the PWA is not on the Home
-//! Screen. This makes OPFS the correct layer for months-long persistence on
-//! Apple devices.
+//! Safari 16.4+ (iOS/macOS) supports OPFS and it is a better long-term backup
+//! target than localStorage for session logs. It still participates in WebKit's
+//! broader site-storage policy, so treat it as a best-effort backup unless the
+//! origin is granted persistent storage.
 //!
 //! Strategy:
 //!   - Every `save_session()` writes to localStorage → IDB → OPFS (all three).
@@ -13,7 +12,7 @@
 //!   - `delete_from_opfs()` is called on explicit session delete.
 //!
 //! Data layout in the OPFS root directory:
-//!   pcpp_index.json           → JSON Vec<String>   (session UUID list)
+//!   pcpp_index.json           → best-effort JSON Vec<String> cache
 //!   pcpp_events_{uuid}.json   → JSON Vec<EventEnvelope>
 //!
 //! All operations are async and spawned via `leptos::task::spawn_local`.
@@ -27,9 +26,11 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 
 const INDEX_FILENAME: &str = "pcpp_index.json";
+const EVENTS_PREFIX: &str = "pcpp_events_";
+const EVENTS_SUFFIX: &str = ".json";
 
 fn events_filename(session_id: &str) -> String {
-    format!("pcpp_events_{session_id}.json")
+    format!("{EVENTS_PREFIX}{session_id}{EVENTS_SUFFIX}")
 }
 
 // ── OPFS root ─────────────────────────────────────────────────────────────────
@@ -164,6 +165,60 @@ async fn write_index(root: &JsValue, ids: &[String]) -> Option<()> {
     opfs_write(root, INDEX_FILENAME, &json).await
 }
 
+async fn list_filenames(root: &JsValue) -> Vec<String> {
+    let keys_fn: js_sys::Function = match Reflect::get(root, &JsValue::from_str("keys"))
+        .ok()
+        .and_then(|v| v.dyn_into().ok())
+    {
+        Some(f) => f,
+        None => return vec![],
+    };
+    let iterator = match keys_fn.call0(root).ok() {
+        Some(v) => v,
+        None => return vec![],
+    };
+    let next_fn: js_sys::Function = match Reflect::get(&iterator, &JsValue::from_str("next"))
+        .ok()
+        .and_then(|v| v.dyn_into().ok())
+    {
+        Some(f) => f,
+        None => return vec![],
+    };
+
+    let mut names = Vec::new();
+    loop {
+        let step_promise: Promise = match next_fn.call0(&iterator).ok().and_then(|v| v.dyn_into().ok()) {
+            Some(p) => p,
+            None => break,
+        };
+        let step = match JsFuture::from(step_promise).await.ok() {
+            Some(v) => v,
+            None => break,
+        };
+        let done = Reflect::get(&step, &JsValue::from_str("done"))
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if done {
+            break;
+        }
+        if let Some(name) = Reflect::get(&step, &JsValue::from_str("value"))
+            .ok()
+            .and_then(|v| v.as_string())
+        {
+            names.push(name);
+        }
+    }
+    names
+}
+
+fn session_id_from_filename(filename: &str) -> Option<String> {
+    filename
+        .strip_prefix(EVENTS_PREFIX)?
+        .strip_suffix(EVENTS_SUFFIX)
+        .map(str::to_string)
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Persist `events_json` for `session_id` in OPFS. Fire-and-forget.
@@ -197,7 +252,16 @@ pub async fn load_ids_from_opfs() -> Vec<String> {
     let Some(root) = get_opfs_root().await else {
         return vec![];
     };
-    read_index(&root).await
+    let mut ids = read_index(&root).await;
+    for name in list_filenames(&root).await {
+        let Some(id) = session_id_from_filename(&name) else {
+            continue;
+        };
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// Remove a session from OPFS. Fire-and-forget.

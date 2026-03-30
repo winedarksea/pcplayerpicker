@@ -59,6 +59,7 @@ pub fn DashboardPage() -> impl IntoView {
 
     // Load from localStorage if the context session doesn't match this URL
     Effect::new(move |_| {
+        ctx.storage_restore_epoch.get();
         let id = params.with(|p| p.get("id").unwrap_or_default());
         let needs_load = ctx.session.with(|s| {
             s.as_ref()

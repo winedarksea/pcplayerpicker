@@ -33,12 +33,6 @@ fn main() {
 /// Use `wasm_bindgen_futures::spawn_local` for any async work here instead.
 fn pre_mount_init() {
     register_service_worker();
-    // Recover sessions lost to Safari's storage eviction.
-    // Run IDB first (faster), then OPFS (slower but more durable).
-    wasm_bindgen_futures::spawn_local(async {
-        restore_sessions_from_idb().await;
-        restore_sessions_from_opfs().await;
-    });
 }
 
 fn register_service_worker() {
@@ -54,7 +48,20 @@ fn App() -> impl IntoView {
     let ctx = AppContext::new();
     // Sync dark-mode class on <html> on first render without overriding preference persistence.
     apply_dark_mode_class(ctx.dark_mode.get_untracked());
-    provide_context(ctx);
+    provide_context(ctx.clone());
+
+    Effect::new(move |_| {
+        if ctx.storage_restore_epoch.get() != 0 || ctx.storage_restore_in_progress.get() {
+            return;
+        }
+        ctx.storage_restore_in_progress.set(true);
+        leptos::task::spawn_local(async move {
+            restore_sessions_from_idb().await;
+            restore_sessions_from_opfs().await;
+            ctx.storage_restore_in_progress.set(false);
+            ctx.storage_restore_epoch.update(|n| *n += 1);
+        });
+    });
 
     view! {
         <>
