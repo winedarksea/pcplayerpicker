@@ -32,7 +32,7 @@ fn format_update_time(ms: f64) -> String {
     let h = date.get_hours();
     let m = date.get_minutes();
     let am_pm = if h >= 12 { "PM" } else { "AM" };
-    let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+    let h12 = if h.is_multiple_of(12) { 12 } else { h % 12 };
     format!("{h12}:{m:02} {am_pm}")
 }
 

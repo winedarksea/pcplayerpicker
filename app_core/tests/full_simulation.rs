@@ -11,7 +11,7 @@
 use app_core::models::*;
 use app_core::ranking::goal_model::GoalModelEngine;
 use app_core::ranking::RankingEngine;
-use app_core::scheduler::select_scheduler;
+use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
 use app_core::session::SessionManager;
 use std::collections::HashMap;
 
@@ -101,15 +101,15 @@ fn full_offline_simulation_converges() {
 
         let scheduler = select_scheduler(&rankings);
         let start_round = RoundNumber(round as u32 + 1);
-        let scheduled = scheduler.generate_schedule(
-            &players,
-            &rankings,
-            &existing_matches,
-            &config,
-            &mut manager.rng,
-            start_round,
-            1,
-        );
+        let scheduled = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &rankings,
+            existing_matches: &existing_matches,
+            config: &config,
+            rng: &mut manager.rng,
+            starting_round: start_round,
+            num_rounds: 1,
+        });
 
         // Inject generated matches into state via ScheduleGenerated event
         use app_core::events::Event;
@@ -299,24 +299,24 @@ fn rng_is_deterministic() {
     let existing_matches: Vec<&ScheduledMatch> = Vec::new();
 
     let scheduler = select_scheduler(&[]);
-    let sched1 = scheduler.generate_schedule(
-        &players,
-        &[],
-        &existing_matches,
-        &config1,
-        &mut m1.rng,
-        RoundNumber(1),
-        1,
-    );
-    let sched2 = scheduler.generate_schedule(
-        &players,
-        &[],
-        &existing_matches,
-        &config2,
-        &mut m2.rng,
-        RoundNumber(1),
-        1,
-    );
+    let sched1 = scheduler.generate_schedule(ScheduleGenerationRequest {
+        players: &players,
+        rankings: &[],
+        existing_matches: &existing_matches,
+        config: &config1,
+        rng: &mut m1.rng,
+        starting_round: RoundNumber(1),
+        num_rounds: 1,
+    });
+    let sched2 = scheduler.generate_schedule(ScheduleGenerationRequest {
+        players: &players,
+        rankings: &[],
+        existing_matches: &existing_matches,
+        config: &config2,
+        rng: &mut m2.rng,
+        starting_round: RoundNumber(1),
+        num_rounds: 1,
+    });
 
     // Same seed → same schedule
     assert_eq!(

@@ -14,7 +14,7 @@ use app_core::io::csv::{self, import_rankings};
 use app_core::models::{MatchId, MatchResult, MatchStatus, PlayerId, PlayerMatchScore, Role};
 use app_core::ranking::goal_model::GoalModelEngine;
 use app_core::ranking::RankingEngine;
-use app_core::scheduler::select_scheduler;
+use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
@@ -65,7 +65,7 @@ pub fn DashboardPage() -> impl IntoView {
             ctx.session.set(None);
             return;
         }
-        let needs_load = ctx.session.with(|s| {
+        let needs_load = ctx.session.with_untracked(|s| {
             s.as_ref()
                 .and_then(|m| m.state.config.as_ref())
                 .map(|c| c.id.to_string() != id)
@@ -191,15 +191,15 @@ pub fn MatchesTab() -> impl IntoView {
                 let starting_round = manager.state.current_round;
                 let num_rounds = config.scheduling_frequency as u32;
                 let scheduler = select_scheduler(&rankings);
-                let matches = scheduler.generate_schedule(
-                    &active_players,
-                    &rankings,
-                    &existing_matches,
-                    &config,
-                    &mut manager.rng,
+                let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+                    players: &active_players,
+                    rankings: &rankings,
+                    existing_matches: &existing_matches,
+                    config: &config,
+                    rng: &mut manager.rng,
                     starting_round,
                     num_rounds,
-                );
+                });
                 manager.log.append(
                     Event::ScheduleGenerated {
                         round: starting_round,

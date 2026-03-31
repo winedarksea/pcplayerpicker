@@ -5,6 +5,16 @@ pub mod round_robin;
 use crate::models::{Player, PlayerRanking, RoundNumber, ScheduledMatch, SessionConfig};
 use crate::rng::SessionRng;
 
+pub struct ScheduleGenerationRequest<'a> {
+    pub players: &'a [Player],
+    pub rankings: &'a [PlayerRanking],
+    pub existing_matches: &'a [&'a ScheduledMatch],
+    pub config: &'a SessionConfig,
+    pub rng: &'a mut SessionRng,
+    pub starting_round: RoundNumber,
+    pub num_rounds: u32,
+}
+
 /// Pluggable match scheduling algorithm.
 pub trait Scheduler {
     /// Generate `num_rounds` worth of match schedules.
@@ -13,13 +23,7 @@ pub trait Scheduler {
     /// `rankings` may be empty (cold start → round-robin).
     fn generate_schedule(
         &self,
-        players: &[Player],
-        rankings: &[PlayerRanking],
-        existing_matches: &[&ScheduledMatch],
-        config: &SessionConfig,
-        rng: &mut SessionRng,
-        starting_round: RoundNumber,
-        num_rounds: u32,
+        request: ScheduleGenerationRequest<'_>,
     ) -> Vec<ScheduledMatch>;
 }
 

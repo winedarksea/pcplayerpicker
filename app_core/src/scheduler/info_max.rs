@@ -13,10 +13,9 @@ use super::match_candidate::{
 ///
 /// For multi-round batches, the scheduler updates a projected exposure history
 /// and shrinks player uncertainties more for informative, novel matches.
-use super::Scheduler;
+use super::{ScheduleGenerationRequest, Scheduler};
 use crate::models::{
     MatchId, MatchStatus, Player, PlayerId, PlayerRanking, RoundNumber, ScheduledMatch,
-    SessionConfig,
 };
 use crate::rng::SessionRng;
 
@@ -36,16 +35,16 @@ struct SelectedMatchup {
 }
 
 impl Scheduler for InfoMaxScheduler {
-    fn generate_schedule(
-        &self,
-        players: &[Player],
-        rankings: &[PlayerRanking],
-        existing_matches: &[&ScheduledMatch],
-        config: &SessionConfig,
-        rng: &mut SessionRng,
-        starting_round: RoundNumber,
-        num_rounds: u32,
-    ) -> Vec<ScheduledMatch> {
+    fn generate_schedule(&self, request: ScheduleGenerationRequest<'_>) -> Vec<ScheduledMatch> {
+        let ScheduleGenerationRequest {
+            players,
+            rankings,
+            existing_matches,
+            config,
+            rng,
+            starting_round,
+            num_rounds,
+        } = request;
         let team_size = config.team_size as usize;
         let players_per_match = 2 * team_size;
 
@@ -236,6 +235,7 @@ fn combinations(items: &[usize], k: usize) -> Vec<Vec<usize>> {
 mod tests {
     use super::*;
     use crate::models::*;
+    use crate::rng::SessionRng;
 
     fn make_players_with_known_skill(skills: &[(u32, f64)]) -> (Vec<Player>, Vec<PlayerRanking>) {
         let players: Vec<Player> = skills
@@ -285,15 +285,15 @@ mod tests {
         let mut rng = SessionRng::new(&session_id);
         let scheduler = InfoMaxScheduler;
 
-        let matches = scheduler.generate_schedule(
-            &players,
-            &rankings,
-            &[],
-            &config,
-            &mut rng,
-            RoundNumber(1),
-            1,
-        );
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &rankings,
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(1),
+            num_rounds: 1,
+        });
 
         let mut seen = std::collections::HashSet::new();
         for scheduled_match in &matches {
@@ -326,15 +326,15 @@ mod tests {
         let mut rng = SessionRng::new(&session_id);
         let scheduler = InfoMaxScheduler;
 
-        let matches = scheduler.generate_schedule(
-            &players,
-            &high_uncertainty_rankings,
-            &[],
-            &config,
-            &mut rng,
-            RoundNumber(1),
-            1,
-        );
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &high_uncertainty_rankings,
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(1),
+            num_rounds: 1,
+        });
 
         assert_eq!(matches.len(), 1);
         let match_players: Vec<u32> = matches[0]
@@ -358,15 +358,15 @@ mod tests {
         let mut rng = SessionRng::new(&session_id);
         let scheduler = InfoMaxScheduler;
 
-        let matches = scheduler.generate_schedule(
-            &players,
-            &rankings,
-            &[],
-            &config,
-            &mut rng,
-            RoundNumber(1),
-            1,
-        );
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &rankings,
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(1),
+            num_rounds: 1,
+        });
 
         assert_eq!(matches.len(), 1);
         let team_a_total: f64 = matches[0]
@@ -415,15 +415,15 @@ mod tests {
             status: MatchStatus::Completed,
         };
 
-        let matches = scheduler.generate_schedule(
-            &players,
-            &rankings,
-            &[&prior_match],
-            &config,
-            &mut rng,
-            RoundNumber(2),
-            1,
-        );
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &rankings,
+            existing_matches: &[&prior_match],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(2),
+            num_rounds: 1,
+        });
 
         assert_eq!(matches.len(), 1);
         let repeated_teammates = matches[0].team_a == prior_match.team_a

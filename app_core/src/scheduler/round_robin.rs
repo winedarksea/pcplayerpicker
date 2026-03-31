@@ -8,27 +8,26 @@ use super::match_candidate::{
 /// faces every other player an equal number of times over the full rotation.
 /// Teams within each match are assigned by searching all unique partitions and
 /// picking the one with the lowest repeat-exposure penalty.
-use super::Scheduler;
+use super::{ScheduleGenerationRequest, Scheduler};
 use crate::models::{
-    MatchId, MatchStatus, Player, PlayerRanking, RoundNumber, ScheduledMatch, SessionConfig,
+    MatchId, MatchStatus, Player, RoundNumber, ScheduledMatch,
 };
-use crate::rng::SessionRng;
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 pub struct RoundRobinScheduler;
 
 impl Scheduler for RoundRobinScheduler {
-    fn generate_schedule(
-        &self,
-        players: &[Player],
-        _rankings: &[PlayerRanking],
-        existing_matches: &[&ScheduledMatch],
-        config: &SessionConfig,
-        rng: &mut SessionRng,
-        starting_round: RoundNumber,
-        num_rounds: u32,
-    ) -> Vec<ScheduledMatch> {
+    fn generate_schedule(&self, request: ScheduleGenerationRequest<'_>) -> Vec<ScheduledMatch> {
+        let ScheduleGenerationRequest {
+            players,
+            rankings: _rankings,
+            existing_matches,
+            config,
+            rng,
+            starting_round,
+            num_rounds,
+        } = request;
         let team_size = config.team_size as usize;
         let players_per_match = 2 * team_size;
         let n = players.len();
@@ -175,6 +174,7 @@ fn best_team_partition_for_round_robin_group(
 mod tests {
     use super::*;
     use crate::models::*;
+    use crate::rng::SessionRng;
 
     fn make_players(n: u32) -> Vec<Player> {
         (1..=n)
@@ -195,8 +195,15 @@ mod tests {
         let config = SessionConfig::new(2, 1, Sport::Soccer);
         let session_id = config.id.clone();
         let mut rng = SessionRng::new(&session_id);
-        let matches =
-            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng, RoundNumber(1), 1);
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &[],
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(1),
+            num_rounds: 1,
+        });
         // 8 players / (2*2 per match) = 2 matches per round
         assert_eq!(matches.len(), 2);
     }
@@ -208,8 +215,15 @@ mod tests {
         let config = SessionConfig::new(2, 1, Sport::Soccer);
         let session_id = config.id.clone();
         let mut rng = SessionRng::new(&session_id);
-        let matches =
-            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng, RoundNumber(1), 1);
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &[],
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(1),
+            num_rounds: 1,
+        });
 
         let mut seen = std::collections::HashSet::new();
         for m in &matches {
@@ -233,10 +247,24 @@ mod tests {
         let mut rng1 = SessionRng::new(&session_id);
         let mut rng2 = SessionRng::new(&session_id);
 
-        let m1 =
-            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng1, RoundNumber(1), 3);
-        let m2 =
-            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng2, RoundNumber(1), 3);
+        let m1 = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &[],
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng1,
+            starting_round: RoundNumber(1),
+            num_rounds: 3,
+        });
+        let m2 = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &[],
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng2,
+            starting_round: RoundNumber(1),
+            num_rounds: 3,
+        });
 
         let ids1: Vec<_> = m1
             .iter()
@@ -265,15 +293,15 @@ mod tests {
             status: MatchStatus::Completed,
         };
 
-        let matches = scheduler.generate_schedule(
-            &players,
-            &[],
-            &[&prior_match],
-            &config,
-            &mut rng,
-            RoundNumber(2),
-            1,
-        );
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &[],
+            existing_matches: &[&prior_match],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(2),
+            num_rounds: 1,
+        });
 
         assert_eq!(matches.len(), 1);
         let repeated_teammates = matches[0].team_a == prior_match.team_a
