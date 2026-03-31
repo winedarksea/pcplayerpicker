@@ -134,25 +134,6 @@ pub fn storage_remove(key: &str) {
     }
 }
 
-const DEVICE_ID_KEY: &str = "pcpp_device_id";
-
-/// Return a stable random device ID for this browser, generating one if needed.
-/// Used by the heartbeat feature to identify which coach device is active.
-pub fn get_or_create_device_id() -> String {
-    if let Some(id) = storage_get(DEVICE_ID_KEY) {
-        if !id.is_empty() {
-            return id;
-        }
-    }
-    // Build a pseudo-random ID from timestamp + Math.random() — sufficient for
-    // a device identifier (not cryptographic).
-    let ts = js_sys::Date::now() as u64;
-    let rnd = (js_sys::Math::random() * f64::from(u32::MAX)) as u64;
-    let id = format!("{ts:016x}{rnd:08x}");
-    storage_set(DEVICE_ID_KEY, &id);
-    id
-}
-
 // ── Session persistence ───────────────────────────────────────────────────────
 
 /// Persist the event log for a session to IDB and OPFS, while keeping only

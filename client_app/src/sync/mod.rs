@@ -456,40 +456,6 @@ pub async fn push_session_archive(
         .map(|_| ())
 }
 
-// ── Heartbeat ─────────────────────────────────────────────────────────────────
-
-/// An active coach device as returned by GET /api/sessions/:id/heartbeat.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DeviceHeartbeat {
-    pub device_id: String,
-    #[serde(default)]
-    pub label: String,
-    pub last_seen: f64,
-}
-
-#[derive(Deserialize)]
-struct DeviceHeartbeatResponse {
-    #[serde(default)]
-    devices: Vec<DeviceHeartbeat>,
-}
-
-/// Record this device's presence on the server and return the active device list.
-///
-/// `device_id` should be a stable UUID stored in localStorage.
-/// `label` is an optional human-readable string (e.g. "iPhone 15 · Safari").
-pub async fn send_heartbeat(
-    sync: &SyncState,
-    device_id: &str,
-    label: &str,
-) -> Result<Vec<DeviceHeartbeat>, String> {
-    let body = serde_json::json!({ "device_id": device_id, "label": label });
-    let url = format!("{}/api/sessions/{}/heartbeat", api_base(), sync.session_id);
-    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
-    let resp: DeviceHeartbeatResponse =
-        serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
-    Ok(resp.devices)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{format_error_body_for_display, reflected_property_string};

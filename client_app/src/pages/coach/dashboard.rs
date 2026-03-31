@@ -1,8 +1,8 @@
 use crate::meta::use_page_meta;
-use crate::state::{get_or_create_device_id, load_session, save_session, AppContext};
+use crate::state::{load_session, save_session, AppContext};
 use crate::sync::{
-    go_online, load_sync_state, push_new_events, push_session_archive, send_heartbeat,
-    set_recovery_pin, set_token_pin, DeviceHeartbeat, SessionArchive, SyncState,
+    go_online, load_sync_state, push_new_events, push_session_archive, set_recovery_pin,
+    set_token_pin, SessionArchive, SyncState,
 };
 /// Coach dashboard — tab layout driven by a `:tab` URL param.
 ///
@@ -20,8 +20,6 @@ use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
 
-const COACH_HEARTBEAT_INTERVAL_MS: u32 = 5 * 60_000;
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn tab_class(active: bool) -> &'static str {
@@ -32,99 +30,6 @@ fn tab_class(active: bool) -> &'static str {
         "shrink-0 min-w-[88px] px-3 py-3 text-gray-400 hover:text-gray-200 font-medium \
          text-xs text-center border-b-2 border-transparent transition-colors md:flex-1"
     }
-}
-
-fn browser_family_from_user_agent(user_agent: &str) -> &'static str {
-    let ua = user_agent.to_ascii_lowercase();
-    if ua.contains("edg/") {
-        "Edge"
-    } else if ua.contains("opr/") || ua.contains("opera") {
-        "Opera"
-    } else if ua.contains("firefox/") {
-        "Firefox"
-    } else if ua.contains("samsungbrowser/") {
-        "Samsung Internet"
-    } else if ua.contains("crios/") || ua.contains("chrome/") {
-        "Chrome"
-    } else if ua.contains("safari/") {
-        "Safari"
-    } else {
-        "Browser"
-    }
-}
-
-fn platform_family_from_user_agent(user_agent: &str) -> &'static str {
-    let ua = user_agent.to_ascii_lowercase();
-    if ua.contains("iphone") || ua.contains("ipad") || ua.contains("ipod") {
-        "iOS"
-    } else if ua.contains("android") {
-        "Android"
-    } else if ua.contains("mac os x") || ua.contains("macintosh") {
-        "macOS"
-    } else if ua.contains("windows") {
-        "Windows"
-    } else if ua.contains("linux") {
-        "Linux"
-    } else {
-        "Unknown OS"
-    }
-}
-
-fn form_factor_from_user_agent(user_agent: &str) -> &'static str {
-    let ua = user_agent.to_ascii_lowercase();
-    if ua.contains("mobile") || ua.contains("iphone") || ua.contains("android") {
-        "mobile"
-    } else if ua.contains("ipad") || ua.contains("tablet") {
-        "tablet"
-    } else {
-        "desktop"
-    }
-}
-
-/// Build a concise, privacy-safe device label from browser hints.
-/// Browsers do not expose the user-defined OS device name.
-fn build_human_device_label() -> String {
-    let Some(window) = web_sys::window() else {
-        return "Unknown device".to_string();
-    };
-
-    let navigator = window.navigator();
-    let user_agent = navigator.user_agent().ok().unwrap_or_default();
-
-    if user_agent.is_empty() {
-        return "Unknown device".to_string();
-    }
-
-    let browser = browser_family_from_user_agent(&user_agent);
-    let platform = platform_family_from_user_agent(&user_agent);
-    let form_factor = form_factor_from_user_agent(&user_agent);
-    let language = navigator.language();
-
-    let viewport = match (window.inner_width(), window.inner_height()) {
-        (Ok(w), Ok(h)) => {
-            let w = w.as_f64().unwrap_or_default().round() as i64;
-            let h = h.as_f64().unwrap_or_default().round() as i64;
-            if w > 0 && h > 0 {
-                Some(format!("{w}x{h}"))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-
-    let mut parts = vec![format!("{browser} on {platform}"), form_factor.to_string()];
-    if let Some(size) = viewport {
-        parts.push(size);
-    }
-    if let Some(language) = language {
-        if !language.is_empty() {
-            parts.push(language);
-        }
-    }
-
-    let label = parts.join(" | ");
-    label.chars().take(96).collect()
 }
 
 // ── Dashboard page (parent + tab router) ─────────────────────────────────────
@@ -1896,51 +1801,6 @@ pub fn OnlineTab() -> impl IntoView {
     let is_going_online = RwSignal::new(false);
     let online_error = RwSignal::new(String::new());
 
-    // Device heartbeat: active coach devices seen in the last 5 minutes
-    let active_devices: RwSignal<Vec<DeviceHeartbeat>> = RwSignal::new(vec![]);
-    let device_id = get_or_create_device_id();
-    let device_label = build_human_device_label();
-
-    // Heartbeat loop — pings every 5 minutes while the session is online.
-    let stop_hb = RwSignal::new(false);
-    on_cleanup(move || stop_hb.set(true));
-    {
-        let device_id = device_id.clone();
-        let device_label = device_label.clone();
-        leptos::task::spawn_local(async move {
-            use gloo_timers::future::TimeoutFuture;
-            loop {
-                TimeoutFuture::new(COACH_HEARTBEAT_INTERVAL_MS).await;
-                if stop_hb.get_untracked() {
-                    break;
-                }
-                if let Some(state) = sync.get_untracked() {
-                    if let Ok(devices) = send_heartbeat(&state, &device_id, &device_label).await {
-                        active_devices.set(devices);
-                    }
-                }
-            }
-        });
-    }
-
-    // Immediately send heartbeat + fetch devices when going online
-    {
-        let device_id = device_id.clone();
-        let device_label = device_label.clone();
-        Effect::new(move |_| {
-            if let Some(state) = sync.get() {
-                let state = state.clone();
-                let device_id = device_id.clone();
-                let device_label = device_label.clone();
-                leptos::task::spawn_local(async move {
-                    if let Ok(devices) = send_heartbeat(&state, &device_id, &device_label).await {
-                        active_devices.set(devices);
-                    }
-                });
-            }
-        });
-    }
-
     // Coach recovery PIN signals
     let pin_input = RwSignal::new(String::new());
     let pin_status = RwSignal::new(String::new()); // "" | "Setting…" | "PIN set." | error
@@ -2001,8 +1861,6 @@ pub fn OnlineTab() -> impl IntoView {
 
     let on_sync = StoredValue::new({
         let ctx = ctx.clone();
-        let device_id = device_id.clone();
-        let device_label = device_label.clone();
         move |_| {
             let events = ctx
                 .session
@@ -2033,17 +1891,10 @@ pub fn OnlineTab() -> impl IntoView {
             if let Some(events) = events {
                 if let Some(mut state) = sync.get_untracked() {
                     online_error.set(String::new());
-                    let device_id = device_id.clone();
-                    let device_label = device_label.clone();
                     leptos::task::spawn_local(async move {
                         if let Err(e) = push_new_events(&mut state, &events).await {
                             online_error.set(format!("Sync failed: {e}"));
                         } else {
-                            if let Ok(devices) =
-                                send_heartbeat(&state, &device_id, &device_label).await
-                            {
-                                active_devices.set(devices);
-                            }
                             // Best-effort: push archive snapshot so final results survive
                             // the raw event retention window. Errors are silently ignored.
                             if let Some(arch) = archive {
@@ -2255,62 +2106,9 @@ pub fn OnlineTab() -> impl IntoView {
                                         </div>
                                     }
                                 }
-
-                                // Active devices heartbeat card
-                                <DeviceListCard devices=active_devices />
-
                             </div>
                         }.into_any()
                     }
-                }
-            }}
-        </div>
-    }
-}
-
-/// Card showing which coach devices have recently sent a heartbeat.
-#[component]
-fn DeviceListCard(devices: RwSignal<Vec<DeviceHeartbeat>>) -> impl IntoView {
-    view! {
-        <div class="bg-gray-900 border border-gray-700/50 rounded-xl p-4">
-            <p class="text-xs font-semibold uppercase tracking-widest text-gray-500 mb-3">
-                "Active Devices"
-            </p>
-            <p class="text-sm text-gray-400 mb-3">
-                "Coach devices that have been active in the last 5 minutes."
-            </p>
-            {move || {
-                let list = devices.get();
-                if list.is_empty() {
-                    view! {
-                        <p class="text-sm text-gray-500 italic">"No other active devices detected."</p>
-                    }.into_any()
-                } else {
-                    let now_ms = js_sys::Date::now();
-                    view! {
-                        <ul class="space-y-2">
-                            {list.into_iter().map(|d| {
-                                let secs_ago = ((now_ms - d.last_seen) / 1000.0) as u64;
-                                let ago = if secs_ago < 60 {
-                                    format!("{secs_ago}s ago")
-                                } else {
-                                    format!("{}m ago", secs_ago / 60)
-                                };
-                                let label = if d.label.is_empty() {
-                                    d.device_id[..8.min(d.device_id.len())].to_string()
-                                } else {
-                                    // Keep enough room to show browser + platform + viewport.
-                                    d.label.chars().take(72).collect::<String>()
-                                };
-                                view! {
-                                    <li class="flex items-center justify-between text-sm gap-2">
-                                        <span class="text-gray-300 truncate">{label}</span>
-                                        <span class="text-gray-500 shrink-0 text-xs">{ago}</span>
-                                    </li>
-                                }
-                            }).collect_view()}
-                        </ul>
-                    }.into_any()
                 }
             }}
         </div>
