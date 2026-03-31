@@ -1,9 +1,8 @@
-use crate::state::{storage_get, storage_remove, storage_set};
 use app_core::events::{EventEnvelope, EventLog};
 use serde::{Deserialize, Serialize};
 
 const READ_ONLY_EVENT_CACHE_PREFIX: &str = "pcpp_read_only_events_";
-const READ_ONLY_EVENT_CACHE_TTL_MS: f64 = 12.0 * 60.0 * 60.0 * 1000.0;
+const READ_ONLY_EVENT_CACHE_TTL_MS: f64 = 30.0 * 60.0 * 1000.0;
 
 #[derive(Serialize, Deserialize)]
 struct CachedReadOnlyEventLog {
@@ -19,12 +18,18 @@ fn cache_is_stale(saved_at_ms: f64, now_ms: f64) -> bool {
     saved_at_ms + READ_ONLY_EVENT_CACHE_TTL_MS <= now_ms
 }
 
+fn session_storage() -> Option<web_sys::Storage> {
+    web_sys::window()
+        .and_then(|window| window.session_storage().ok())
+        .flatten()
+}
+
 pub fn load_cached_read_only_event_log(session_id: &str) -> Option<EventLog> {
     let key = read_only_event_cache_key(session_id);
-    let raw = storage_get(&key)?;
+    let raw = session_storage()?.get_item(&key).ok().flatten()?;
     let cached: CachedReadOnlyEventLog = serde_json::from_str(&raw).ok()?;
     if cache_is_stale(cached.saved_at_ms, js_sys::Date::now()) {
-        storage_remove(&key);
+        let _ = session_storage().and_then(|storage| storage.remove_item(&key).ok());
         return None;
     }
     Some(EventLog::from_saved(cached.events))
@@ -36,7 +41,9 @@ pub fn save_cached_read_only_event_log(session_id: &str, log: &EventLog) {
         events: log.all().to_vec(),
     };
     if let Ok(json) = serde_json::to_string(&cached) {
-        storage_set(&read_only_event_cache_key(session_id), &json);
+        if let Some(storage) = session_storage() {
+            let _ = storage.set_item(&read_only_event_cache_key(session_id), &json);
+        }
     }
 }
 
