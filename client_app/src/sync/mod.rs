@@ -41,10 +41,19 @@ pub fn api_base() -> String {
 /// sync degrade instead of taking down the whole app shell.
 fn browser_origin() -> Option<String> {
     let window = web_sys::window()?;
-    js_sys::Reflect::get(&window.location(), &JsValue::from_str("origin"))
+    reflected_property_string(window.location().as_ref(), "origin")
+}
+
+fn reflected_property_string(target: &JsValue, property_name: &str) -> Option<String> {
+    js_sys::Reflect::get(target, &JsValue::from_str(property_name))
         .ok()
         .and_then(|value| value.as_string())
-        .filter(|origin| !origin.is_empty())
+        .filter(|value| !value.is_empty())
+}
+
+fn parsed_url_origin(url: &str) -> Option<String> {
+    let parsed = web_sys::Url::new(url).ok()?;
+    reflected_property_string(parsed.as_ref(), "origin")
 }
 
 // ── Persistent sync state (stored in localStorage) ───────────────────────────
@@ -185,10 +194,7 @@ async fn fetch_json(
     opts.set_method(method);
     let window = web_sys::window().ok_or("no window")?;
     let current_origin = browser_origin().unwrap_or_default();
-    let request_origin = web_sys::Url::new(url)
-        .ok()
-        .map(|parsed| parsed.origin())
-        .unwrap_or_default();
+    let request_origin = parsed_url_origin(url).unwrap_or_default();
     if !current_origin.is_empty() && current_origin == request_origin {
         opts.set_mode(RequestMode::SameOrigin);
     } else {
@@ -425,4 +431,45 @@ pub async fn fetch_active_devices(sync: &SyncState) -> Result<Vec<DeviceHeartbea
     }
     let resp: Resp = serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
     Ok(resp.devices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_error_body_for_display, reflected_property_string};
+    use wasm_bindgen::JsValue;
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn reflected_property_string_reads_plain_string_fields() {
+        let object = js_sys::Object::new();
+        assert!(js_sys::Reflect::set(
+            &object,
+            &JsValue::from_str("origin"),
+            &JsValue::from_str("https://pcplayerpicker.com")
+        )
+        .expect("Reflect.set should succeed"));
+
+        assert_eq!(
+            reflected_property_string(object.as_ref(), "origin"),
+            Some("https://pcplayerpicker.com".to_string())
+        );
+        assert_eq!(reflected_property_string(object.as_ref(), "missing"), None);
+    }
+
+    #[test]
+    fn format_error_body_for_display_includes_high_signal_context() {
+        let body = r#"{
+            "error":"internal_server_error",
+            "route":"POST /api/sessions",
+            "message":"D1_TYPE_ERROR",
+            "context":{"session_id":"abc","event_count":11}
+        }"#;
+
+        assert_eq!(
+            format_error_body_for_display(body),
+            "internal_server_error; route=POST /api/sessions; message=D1_TYPE_ERROR; session_id=\"abc\"; event_count=11"
+        );
+    }
 }

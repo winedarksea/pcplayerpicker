@@ -48,6 +48,22 @@ fn gen_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// D1 rejects JS `BigInt` bind values, while Rust integer -> `JsValue`
+/// conversions in wasm produce `BigInt` for 64-bit integers. Event sequence
+/// numbers and timestamps in this app stay far below JS's safe integer limit,
+/// so bind them as plain JS `Number`s instead.
+fn d1_number(value: f64) -> worker::wasm_bindgen::JsValue {
+    worker::wasm_bindgen::JsValue::from_f64(value)
+}
+
+fn d1_u64(value: u64) -> worker::wasm_bindgen::JsValue {
+    d1_number(value as f64)
+}
+
+fn d1_u32(value: u32) -> worker::wasm_bindgen::JsValue {
+    d1_number(f64::from(value))
+}
+
 // ── Request / Response types ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -314,7 +330,7 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
         )
         .bind(&[
             body.session_id.as_str().into(),
-            js_sys::Date::now().into(),
+            d1_number(js_sys::Date::now()),
             coach_key_hash.as_str().into(),
         ])?
         .run()
@@ -329,7 +345,7 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
             )
             .bind(&[
                 body.session_id.as_str().into(),
-                env_event.session_version.into(),
+                d1_u64(env_event.session_version),
                 payload.as_str().into(),
             ])?
             .run()
@@ -397,7 +413,7 @@ async fn handle_get_events(
              WHERE session_id = ?1 AND seq > ?2 \
              ORDER BY seq ASC LIMIT 500",
         )
-        .bind(&[session_id.into(), since.into()])?
+        .bind(&[session_id.into(), d1_u64(since)])?
         .all()
         .await?;
 
@@ -508,7 +524,7 @@ async fn handle_append_events(
         db.prepare("INSERT INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)")
             .bind(&[
                 session_id.into(),
-                (next_seq as u32).into(),
+                d1_u32(next_seq as u32),
                 payload.as_str().into(),
             ])?
             .run()
@@ -958,9 +974,9 @@ async fn handle_archive_session(
     .bind(&[
         session_id.into(),
         body.sport.as_str().into(),
-        (body.team_size as u32).into(),
-        created_at.into(),
-        js_sys::Date::now().into(),
+        d1_u32(body.team_size as u32),
+        d1_number(created_at),
+        d1_number(js_sys::Date::now()),
         player_names_json.as_str().into(),
         final_rankings_json.as_str().into(),
     ])?
@@ -1036,7 +1052,7 @@ async fn handle_heartbeat_post(
     .bind(&[
         session_id.into(),
         body.device_id.as_str().into(),
-        now.into(),
+        d1_number(now),
         label.as_str().into(),
     ])?
     .run()
@@ -1089,7 +1105,7 @@ async fn handle_heartbeat_get(
              WHERE session_id = ?1 AND last_seen >= ?2 \
              ORDER BY last_seen DESC",
         )
-        .bind(&[session_id.into(), active_threshold.into()])?
+        .bind(&[session_id.into(), d1_number(active_threshold)])?
         .all()
         .await?;
 
@@ -1131,7 +1147,7 @@ mod cleanup_job {
             "DELETE FROM events WHERE session_id IN \
              (SELECT id FROM sessions WHERE created_at < ?1)",
         )
-        .bind(&[raw_cutoff.into()])?
+        .bind(&[d1_number(raw_cutoff)])?
         .run()
         .await?;
 
@@ -1140,26 +1156,26 @@ mod cleanup_job {
             "DELETE FROM share_tokens WHERE session_id IN \
              (SELECT id FROM sessions WHERE created_at < ?1)",
         )
-        .bind(&[raw_cutoff.into()])?
+        .bind(&[d1_number(raw_cutoff)])?
         .run()
         .await?;
 
         // Delete the session rows themselves
         db.prepare("DELETE FROM sessions WHERE created_at < ?1")
-            .bind(&[raw_cutoff.into()])?
+            .bind(&[d1_number(raw_cutoff)])?
             .run()
             .await?;
 
         // Prune old archived summaries
         db.prepare("DELETE FROM archived_sessions WHERE created_at < ?1")
-            .bind(&[archive_cutoff.into()])?
+            .bind(&[d1_number(archive_cutoff)])?
             .run()
             .await?;
 
         // Prune stale device heartbeats older than 24 hours
         let heartbeat_cutoff = now - 86_400_000.0;
         db.prepare("DELETE FROM device_heartbeats WHERE last_seen < ?1")
-            .bind(&[heartbeat_cutoff.into()])?
+            .bind(&[d1_number(heartbeat_cutoff)])?
             .run()
             .await?;
 
@@ -1204,7 +1220,7 @@ async fn get_or_create_tokens(session_id: &str, db: &D1Database) -> Result<(Stri
                 "INSERT INTO share_tokens (token, session_id, role, created_at) \
                  VALUES (?1, ?2, 'assistant', ?3)",
             )
-            .bind(&[t.as_str().into(), session_id.into(), now.into()])?
+            .bind(&[t.as_str().into(), session_id.into(), d1_number(now)])?
             .run()
             .await?;
             t
@@ -1219,7 +1235,7 @@ async fn get_or_create_tokens(session_id: &str, db: &D1Database) -> Result<(Stri
                 "INSERT INTO share_tokens (token, session_id, role, created_at) \
                  VALUES (?1, ?2, 'player', ?3)",
             )
-            .bind(&[t.as_str().into(), session_id.into(), now.into()])?
+            .bind(&[t.as_str().into(), session_id.into(), d1_number(now)])?
             .run()
             .await?;
             t
