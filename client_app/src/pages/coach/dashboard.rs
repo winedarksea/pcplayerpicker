@@ -20,6 +20,7 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
+use wasm_bindgen::JsCast;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,16 @@ fn tab_class(active: bool) -> &'static str {
         "shrink-0 min-w-[88px] px-3 py-3 text-gray-400 hover:text-gray-200 font-medium \
          text-xs text-center border-b-2 border-transparent transition-colors md:flex-1"
     }
+}
+
+fn select_input_text_on_focus(ev: leptos::ev::FocusEvent) {
+    let Some(target) = ev.target() else {
+        return;
+    };
+    let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() else {
+        return;
+    };
+    let _ = input.select();
 }
 
 // ── Dashboard page (parent + tab router) ─────────────────────────────────────
@@ -2124,8 +2135,19 @@ pub fn OnlineTab() -> impl IntoView {
                                                 <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
                                                     "Session ID"
                                                 </p>
-                                                <p class="text-sm font-mono text-gray-200 break-all">
-                                                    {sync_for_pin.session_id.clone()}
+                                                <input
+                                                    type="text"
+                                                    readonly
+                                                    class="w-full bg-transparent text-sm font-mono text-gray-200 \
+                                                           focus:outline-none"
+                                                    prop:value=sync_for_pin.session_id.clone()
+                                                    on:focus=select_input_text_on_focus
+                                                    autocapitalize="off"
+                                                    autocomplete="off"
+                                                    spellcheck="false"
+                                                />
+                                                <p class="mt-2 text-[11px] text-gray-500">
+                                                    "Copy this exact UUID for recovery. Keep the hyphens."
                                                 </p>
                                             </div>
                                             {move || {

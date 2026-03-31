@@ -11,6 +11,28 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 
+fn canonicalize_recovery_session_id(raw_session_id: &str) -> Option<String> {
+    let trimmed = raw_session_id.trim().trim_matches('{').trim_matches('}');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let compact_hex: String = trimmed.chars().filter(|ch| *ch != '-').collect();
+    if compact_hex.len() != 32 || !compact_hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &compact_hex[0..8],
+        &compact_hex[8..12],
+        &compact_hex[12..16],
+        &compact_hex[16..20],
+        &compact_hex[20..32],
+    )
+    .to_ascii_lowercase())
+}
+
 /// Ask the browser to treat storage as persistent (not subject to eviction).
 /// Called when the coach app loads — not on the landing page.
 fn request_persistent_storage() {
@@ -120,9 +142,16 @@ pub fn CoachHome() -> impl IntoView {
         let ctx = ctx.clone();
         let navigate = navigate.clone();
         move |_| {
-            let session_id = recover_id.get_untracked().trim().to_string();
+            let raw_session_id = recover_id.get_untracked();
             let pin = recover_pin.get_untracked().trim().to_string();
-            if session_id.is_empty() || pin.len() < 4 {
+            let Some(session_id) = canonicalize_recovery_session_id(&raw_session_id) else {
+                recover_status
+                    .set("Enter the full session ID shown online, including all UUID digits."
+                        .to_string());
+                return;
+            };
+            recover_id.set(session_id.clone());
+            if pin.len() < 4 {
                 recover_status.set("Enter a session ID and at least 4-digit PIN.".to_string());
                 return;
             }
@@ -374,7 +403,7 @@ pub fn CoachHome() -> impl IntoView {
                 {move || show_recover.get().then(|| view! {
                     <div class="mt-3 bg-gray-900 border border-gray-700/50 rounded-xl p-4 space-y-3">
                         <p class="text-xs text-gray-400">
-                            "Enter a session ID and the recovery PIN set on the original device."
+                            "Paste the full session ID from the Online tab. Hyphens are accepted and will be normalized automatically."
                         </p>
                         {move || {
                             let s = recover_status.get();
@@ -390,6 +419,9 @@ pub fn CoachHome() -> impl IntoView {
                                    focus:outline-none focus:border-blue-500 min-h-[44px]"
                             prop:value=move || recover_id.get()
                             on:input=move |ev| recover_id.set(event_target_value(&ev))
+                            autocapitalize="off"
+                            autocomplete="off"
+                            spellcheck="false"
                         />
                         <input
                             type="password"

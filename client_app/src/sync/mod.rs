@@ -11,6 +11,7 @@
 
 use app_core::events::EventEnvelope;
 use app_core::models::PlayerRanking;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
@@ -180,7 +181,7 @@ pub struct TokenInfo {
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
-pub async fn fetch_post_json(url: &str, body: &str) -> Result<JsValue, String> {
+pub async fn fetch_post_json(url: &str, body: &str) -> Result<serde_json::Value, String> {
     fetch_json(url, "POST", Some(body.to_string()), None).await
 }
 
@@ -237,12 +238,12 @@ fn format_error_body_for_display(raw_body: &str) -> String {
 }
 
 /// Low-level fetch. `coach_key` is sent as the `X-Coach-Key` header when provided.
-async fn fetch_json(
+async fn fetch_json<T: DeserializeOwned>(
     url: &str,
     method: &str,
     body: Option<String>,
     coach_key: Option<&str>,
-) -> Result<JsValue, String> {
+) -> Result<T, String> {
     let opts = RequestInit::new();
     opts.set_method(method);
     let window = web_sys::window().ok_or("no window")?;
@@ -307,10 +308,16 @@ async fn fetch_json(
         };
     }
 
-    let json_promise = resp.json().map_err(|e| format!("{e:?}"))?;
-    JsFuture::from(json_promise)
-        .await
-        .map_err(|e| format!("{e:?}"))
+    let text = match resp.text() {
+        Ok(promise) => JsFuture::from(promise)
+            .await
+            .map_err(|e| format!("{e:?}"))?
+            .as_string()
+            .unwrap_or_default(),
+        Err(e) => return Err(format!("{e:?}")),
+    };
+
+    serde_json::from_str(&text).map_err(|e| format!("Invalid JSON from {url}: {e}"))
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -323,10 +330,7 @@ pub async fn go_online(session_id: &str, events: &[EventEnvelope]) -> Result<Syn
         "events": events,
     });
     let url = format!("{}/api/sessions", api_base());
-    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), None).await?;
-
-    let resp: UploadResponse =
-        serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
+    let resp: UploadResponse = fetch_json(&url, "POST", Some(body.to_string()), None).await?;
 
     let state = SyncState {
         session_id: session_id.to_string(),
@@ -356,9 +360,8 @@ pub async fn push_new_events(
 
     let body = serde_json::json!({ "events": new_events });
     let url = format!("{}/api/sessions/{}/events", api_base(), sync.session_id);
-    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
     let resp: AppendEventsResponse =
-        serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
+        fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
     sync.last_pushed_seq = resp.cursor;
     save_sync_state(sync);
     Ok(())
@@ -373,8 +376,7 @@ pub async fn pull_events(session_id: &str, since: u32) -> Result<EventsResponse,
         session_id,
         since
     );
-    let resp_val = fetch_json(&url, "GET", None, None).await?;
-    serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())
+    fetch_json(&url, "GET", None, None).await
 }
 
 /// Resolve a share token to session_id + role.
@@ -385,8 +387,7 @@ pub async fn resolve_token(token: &str) -> Result<TokenInfo, String> {
     }
 
     let url = format!("{}/api/t/{}", api_base(), token);
-    let resp_val = fetch_json(&url, "GET", None, None).await?;
-    let info: TokenInfo = serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
+    let info: TokenInfo = fetch_json(&url, "GET", None, None).await?;
     if info.requires_pin {
         clear_cached_token_info(token);
     } else {
@@ -399,8 +400,7 @@ pub async fn resolve_token(token: &str) -> Result<TokenInfo, String> {
 pub async fn auth_token(token: &str, pin: &str) -> Result<TokenInfo, String> {
     let body = serde_json::json!({ "pin": pin });
     let url = format!("{}/api/t/{}/auth", api_base(), token);
-    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), None).await?;
-    serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())
+    fetch_json(&url, "POST", Some(body.to_string()), None).await
 }
 
 /// Set or clear a PIN for a share token (assistant or player link).
@@ -408,28 +408,25 @@ pub async fn auth_token(token: &str, pin: &str) -> Result<TokenInfo, String> {
 pub async fn set_token_pin(token: &str, pin: &str) -> Result<(), String> {
     let body = serde_json::json!({ "pin": pin });
     let url = format!("{}/api/t/{}/pin", api_base(), token);
-    fetch_json(&url, "POST", Some(body.to_string()), None)
-        .await
-        .map(|_| {
-            clear_cached_token_info(token);
-        })
+    let _: serde_json::Value = fetch_json(&url, "POST", Some(body.to_string()), None).await?;
+    clear_cached_token_info(token);
+    Ok(())
 }
 
 /// Set or update the coach recovery PIN for a session in D1.
 pub async fn set_recovery_pin(sync: &SyncState, pin: &str) -> Result<(), String> {
     let body = serde_json::json!({ "pin": pin });
     let url = format!("{}/api/sessions/{}/pin", api_base(), sync.session_id);
-    fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key))
-        .await
-        .map(|_| ())
+    let _: serde_json::Value =
+        fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
+    Ok(())
 }
 
 /// Validate PIN and return all events for cross-device coach recovery.
 pub async fn recover_session(session_id: &str, pin: &str) -> Result<EventsResponse, String> {
     let body = serde_json::json!({ "pin": pin });
     let url = format!("{}/api/sessions/{}/recover", api_base(), session_id);
-    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), None).await?;
-    serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())
+    fetch_json(&url, "POST", Some(body.to_string()), None).await
 }
 
 // ── Archive snapshot ──────────────────────────────────────────────────────────
@@ -456,9 +453,8 @@ pub async fn push_session_archive(
 ) -> Result<(), String> {
     let body = serde_json::to_string(archive).map_err(|e| e.to_string())?;
     let url = format!("{}/api/sessions/{}/archive", api_base(), sync.session_id);
-    fetch_json(&url, "POST", Some(body), Some(&sync.coach_key))
-        .await
-        .map(|_| ())
+    let _: serde_json::Value = fetch_json(&url, "POST", Some(body), Some(&sync.coach_key)).await?;
+    Ok(())
 }
 
 #[cfg(test)]
