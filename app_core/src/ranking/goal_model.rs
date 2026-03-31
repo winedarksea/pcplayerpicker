@@ -579,7 +579,7 @@ mod tests {
             .map(|scheduled_match| (scheduled_match.id, scheduled_match))
             .collect();
 
-        let results = vec![
+        let results = [
             MatchResult {
                 match_id: MatchId(1),
                 scores: HashMap::from([
