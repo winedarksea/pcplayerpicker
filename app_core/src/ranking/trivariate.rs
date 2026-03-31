@@ -89,20 +89,21 @@ impl TrivariateEngine {
             return None;
         }
 
-        // Gate: every player must have >= MIN_MATCHES_FOR_TRIVARIATE matches
-        for player in players {
-            let played = results
-                .iter()
-                .filter(|r| {
-                    r.scores
-                        .get(&player.id)
-                        .map(|s| s.played())
-                        .unwrap_or(false)
-                })
-                .count() as u32;
-            if played < MIN_MATCHES_FOR_TRIVARIATE {
-                return None;
+        // Gate: every player must have >= MIN_MATCHES_FOR_TRIVARIATE matches.
+        // Single pass over results instead of one scan per player.
+        let mut play_counts: HashMap<PlayerId, u32> = HashMap::new();
+        for r in results {
+            for (pid, score) in &r.scores {
+                if score.played() {
+                    *play_counts.entry(*pid).or_insert(0) += 1;
+                }
             }
+        }
+        if players
+            .iter()
+            .any(|p| play_counts.get(&p.id).copied().unwrap_or(0) < MIN_MATCHES_FOR_TRIVARIATE)
+        {
+            return None;
         }
 
         let has_teamwork = team_size >= 2;
@@ -119,6 +120,7 @@ impl TrivariateEngine {
 
         // Newton-Raphson to find MAP
         let mut theta = DVector::zeros(dim);
+        let mut final_hess: Option<DMatrix<f64>> = None;
         for _iter in 0..MAX_ITER {
             let (grad, hess) = grad_hessian(
                 &theta,
@@ -130,6 +132,7 @@ impl TrivariateEngine {
                 self.prior_sigma,
             );
             if grad.norm() < GRAD_TOL {
+                final_hess = Some(hess);
                 break;
             }
             let neg_hess = -hess;
@@ -141,17 +144,20 @@ impl TrivariateEngine {
         }
 
         // Posterior covariance ≈ (-Hessian)^{-1}
-        let (_, hess) = grad_hessian(
-            &theta,
-            &player_index,
-            results,
-            &match_lookup,
-            n,
-            has_teamwork,
-            self.prior_sigma,
-        );
+        // Reuse the Hessian from the final converged iteration when available.
         let cov_diag: Vec<f64> = {
-            let neg_hess = -hess;
+            let neg_hess = -final_hess.unwrap_or_else(|| {
+                grad_hessian(
+                    &theta,
+                    &player_index,
+                    results,
+                    &match_lookup,
+                    n,
+                    has_teamwork,
+                    self.prior_sigma,
+                )
+                .1
+            });
             match neg_hess.cholesky() {
                 Some(chol) => {
                     let cov = chol.inverse();

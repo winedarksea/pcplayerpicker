@@ -81,11 +81,13 @@ impl GoalModelEngine {
         let mut theta = DVector::zeros(n);
 
         // Newton-Raphson iteration
+        let mut final_hessian: Option<DMatrix<f64>> = None;
         for _iter in 0..MAX_ITER {
             let (grad, hessian) =
                 self.log_posterior_grad_hessian(&theta, &player_index, matches_by_id, results, n);
             let grad_norm = grad.norm();
             if grad_norm < GRAD_TOL {
+                final_hessian = Some(hessian);
                 break;
             }
             // Solve: hessian * delta = grad (hessian is negative definite at max)
@@ -101,9 +103,11 @@ impl GoalModelEngine {
         }
 
         // Posterior covariance ≈ (-Hessian)^{-1}
-        let (_, hessian) =
-            self.log_posterior_grad_hessian(&theta, &player_index, matches_by_id, results, n);
-        let neg_hessian = -hessian;
+        // Reuse the Hessian from the final converged iteration when available.
+        let neg_hessian = -final_hessian.unwrap_or_else(|| {
+            self.log_posterior_grad_hessian(&theta, &player_index, matches_by_id, results, n)
+                .1
+        });
         let covariance = match neg_hessian.cholesky() {
             Some(chol) => chol.inverse(),
             None => DMatrix::identity(n, n) * self.prior_sigma.powi(2),
@@ -373,22 +377,15 @@ impl RankingEngine for GoalModelEngine {
                 let p50 = sorted_ranks[n_samples / 2];
                 let p95 = sorted_ranks[19 * n_samples / 20];
 
-                let matches_played = results
-                    .iter()
-                    .filter(|r| {
-                        r.scores
-                            .get(&player.id)
-                            .map(|s| s.played())
-                            .unwrap_or(false)
-                    })
-                    .count() as u32;
-
-                let total_goals = results
-                    .iter()
-                    .flat_map(|r| r.scores.get(&player.id))
-                    .filter_map(|s| s.goals)
-                    .map(|g| g as u32)
-                    .sum();
+                let (matches_played, total_goals) =
+                    results.iter().fold((0u32, 0u32), |(mp, tg), r| {
+                        match r.scores.get(&player.id) {
+                            Some(s) if s.played() => {
+                                (mp + 1, tg + s.goals.map(|g| g as u32).unwrap_or(0))
+                            }
+                            _ => (mp, tg),
+                        }
+                    });
 
                 let mut prob_top_k = samples.iter().filter(|&&r| r <= top_k as u32).count() as f64
                     / n_samples as f64;

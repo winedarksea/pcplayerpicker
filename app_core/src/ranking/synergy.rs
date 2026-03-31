@@ -19,7 +19,7 @@
 ///
 /// Adaptive λ = base_lambda / (1 + sqrt(n_matches)) — decreases with more data.
 /// Data guard: require 30%+ of unique player pairs observed before showing matrix.
-use crate::models::{MatchResult, Player, PlayerId, ScheduledMatch};
+use crate::models::{MatchId, MatchResult, Player, PlayerId, ScheduledMatch};
 use nalgebra::{DMatrix, DVector};
 use serde::{Deserialize, Serialize};
 
@@ -104,12 +104,15 @@ impl SynergyEngine {
         let n_features = n + pairs.len(); // individual APM + pair interactions
         let m = results.len();
 
+        let match_lookup: std::collections::HashMap<MatchId, &ScheduledMatch> =
+            matches.iter().map(|sm| (sm.id, *sm)).collect();
+
         let mut x_mat = DMatrix::zeros(m, n_features);
         let mut y_vec = DVector::zeros(m);
 
         for (row, result) in results.iter().enumerate() {
-            // Find the corresponding match to get team assignments
-            let scheduled = matches.iter().find(|sm| sm.id == result.match_id);
+            // O(1) lookup instead of O(M) linear scan per row
+            let scheduled = match_lookup.get(&result.match_id).copied();
             let (team_a_ids, team_b_ids) = match scheduled {
                 Some(sm) => (sm.team_a.as_slice(), sm.team_b.as_slice()),
                 None => continue, // can't determine teams — skip
@@ -162,11 +165,12 @@ impl SynergyEngine {
         let reg = xtx + lambda_mat;
         let xty = &xt * &y_vec;
 
-        let beta = match reg.clone().cholesky() {
+        let beta = match reg.cholesky() {
             Some(chol) => chol.solve(&xty),
             None => {
-                // Fallback: use pseudo-inverse via LU
-                reg.lu().solve(&xty)?
+                // Fallback: recompute reg for LU decomposition (rare — matrix not PD)
+                let reg2 = (&xt * &x_mat) + DMatrix::identity(n_features, n_features) * lambda;
+                reg2.lu().solve(&xty)?
             }
         };
 
