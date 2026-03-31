@@ -1,7 +1,5 @@
 use crate::meta::use_page_meta;
-use crate::state::{
-    delete_session, load_session_summaries, storage_get, storage_set, AppContext,
-};
+use crate::state::{delete_session, load_session_summaries, storage_get, storage_set, AppContext};
 use crate::sync::recover_session;
 use app_core::events::EventLog;
 use app_core::session::SessionManager;
@@ -215,7 +213,8 @@ pub fn CoachHome() -> impl IntoView {
                     Ok(text_value) => {
                         let text = text_value.as_string().unwrap_or_default();
                         recover_csv_text.set(text);
-                        recover_csv_status.set("CSV file loaded. Review or recover when ready.".to_string());
+                        recover_csv_status
+                            .set("CSV file loaded. Review or recover when ready.".to_string());
                     }
                     Err(_) => {
                         recover_csv_status.set("Failed to read the selected CSV file.".to_string());

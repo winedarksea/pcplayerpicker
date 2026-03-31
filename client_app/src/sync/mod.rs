@@ -122,6 +122,58 @@ pub async fn fetch_post_json(url: &str, body: &str) -> Result<JsValue, String> {
     fetch_json(url, "POST", Some(body.to_string()), None).await
 }
 
+fn response_header_summary(resp: &Response) -> String {
+    let mut parts = Vec::new();
+    for header_name in ["cf-ray", "x-request-id", "content-type"] {
+        if let Ok(Some(value)) = resp.headers().get(header_name) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                parts.push(format!("{header_name}={trimmed}"));
+            }
+        }
+    }
+    parts.join(", ")
+}
+
+fn format_error_body_for_display(raw_body: &str) -> String {
+    let trimmed = raw_body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let Ok(json_value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return trimmed.to_string();
+    };
+
+    let Some(object) = json_value.as_object() else {
+        return trimmed.to_string();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(value) = object.get("error").and_then(|value| value.as_str()) {
+        parts.push(value.to_string());
+    }
+    if let Some(value) = object.get("route").and_then(|value| value.as_str()) {
+        parts.push(format!("route={value}"));
+    }
+    if let Some(value) = object.get("message").and_then(|value| value.as_str()) {
+        parts.push(format!("message={value}"));
+    }
+    if let Some(context) = object.get("context").and_then(|value| value.as_object()) {
+        for field_name in ["session_id", "event_count", "method", "path"] {
+            if let Some(field_value) = context.get(field_name) {
+                parts.push(format!("{field_name}={field_value}"));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        trimmed.to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
 /// Low-level fetch. `coach_key` is sent as the `X-Coach-Key` header when provided.
 async fn fetch_json(
     url: &str,
@@ -170,6 +222,7 @@ async fn fetch_json(
     let resp: Response = resp_val.dyn_into().map_err(|_: JsValue| "not a Response")?;
     if !resp.ok() {
         let status = resp.status();
+        let header_summary = response_header_summary(&resp);
         let text = match resp.text() {
             Ok(promise) => JsFuture::from(promise)
                 .await
@@ -178,11 +231,20 @@ async fn fetch_json(
                 .unwrap_or_default(),
             Err(_) => String::new(),
         };
-        let text = text.trim();
-        return if text.is_empty() {
+        let body_summary = format_error_body_for_display(&text);
+
+        let mut details = Vec::new();
+        if !body_summary.is_empty() {
+            details.push(body_summary);
+        }
+        if !header_summary.is_empty() {
+            details.push(header_summary);
+        }
+
+        return if details.is_empty() {
             Err(format!("HTTP {status} from {url}"))
         } else {
-            Err(format!("HTTP {status} from {url}: {text}"))
+            Err(format!("HTTP {status} from {url}: {}", details.join(" | ")))
         };
     }
 

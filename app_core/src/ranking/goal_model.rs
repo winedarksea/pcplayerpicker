@@ -335,7 +335,7 @@ impl RankingEngine for GoalModelEngine {
                 if !theta_mean.is_finite() {
                     theta_mean = 0.0;
                 }
-                
+
                 // Widen uncertainty for inactive players: their skill estimate is
                 // "as of last match" and becomes less reliable with time.
                 // A fixed 1.5× multiplier is a conservative first approximation.

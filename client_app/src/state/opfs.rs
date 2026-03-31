@@ -187,7 +187,11 @@ async fn list_filenames(root: &JsValue) -> Vec<String> {
 
     let mut names = Vec::new();
     loop {
-        let step_promise: Promise = match next_fn.call0(&iterator).ok().and_then(|v| v.dyn_into().ok()) {
+        let step_promise: Promise = match next_fn
+            .call0(&iterator)
+            .ok()
+            .and_then(|v| v.dyn_into().ok())
+        {
             Some(p) => p,
             None => break,
         };

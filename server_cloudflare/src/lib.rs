@@ -147,8 +147,38 @@ fn err_json(msg: &str, status: u16, origin: &str) -> Result<Response> {
     Ok(with_cors(Response::error(msg, status)?, origin))
 }
 
-async fn parse_json_req<T: serde::de::DeserializeOwned>(req: &mut Request) -> std::result::Result<T, String> {
-    let body_text = req.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+fn diagnostic_json<T: Serialize>(val: &T, status: u16, origin: &str) -> Result<Response> {
+    Ok(with_cors(
+        Response::builder().with_status(status).from_json(val)?,
+        origin,
+    ))
+}
+
+fn internal_api_error_response(
+    origin: &str,
+    route: &str,
+    error: &Error,
+    context: serde_json::Value,
+) -> Result<Response> {
+    diagnostic_json(
+        &serde_json::json!({
+            "error": "internal_server_error",
+            "route": route,
+            "message": error.to_string(),
+            "context": context,
+        }),
+        500,
+        origin,
+    )
+}
+
+async fn parse_json_req<T: serde::de::DeserializeOwned>(
+    req: &mut Request,
+) -> std::result::Result<T, String> {
+    let body_text = req
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read body: {}", e))?;
     serde_json::from_str(&body_text).map_err(|e| format!("Invalid JSON: {}", e))
 }
 
@@ -176,7 +206,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return Ok(resp);
     }
 
-    match (method.clone(), path.as_str()) {
+    let route_result = match (method.clone(), path.as_str()) {
         (Method::Get, "/api/health") => ok_json(&serde_json::json!({"ok": true}), &origin),
 
         // Upload initial event log and create session
@@ -206,6 +236,19 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
         // Static assets handled by Workers Assets; fall through
         _ => Response::error("Not found", 404),
+    };
+
+    match route_result {
+        Ok(resp) => Ok(resp),
+        Err(error) => internal_api_error_response(
+            &origin,
+            "request_dispatch",
+            &error,
+            serde_json::json!({
+                "method": format!("{method:?}"),
+                "path": path,
+            }),
+        ),
     }
 }
 
@@ -258,29 +301,32 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
         );
     }
 
-    let db = env.d1("DB")?;
+    let upload_result = async {
+        let db = env.d1("DB")?;
 
-    // Generate a random coach write key and store its hash
-    let coach_key = gen_token();
-    let coach_key_hash = simple_hash(&coach_key, &body.session_id);
+        // Keep step-local diagnostics so worker failures identify whether the
+        // D1 setup, event serialization, insert, or token generation failed.
+        let coach_key = gen_token();
+        let coach_key_hash = simple_hash(&coach_key, &body.session_id);
 
-    // Upsert session record
-    db.prepare(
-        "INSERT OR IGNORE INTO sessions (id, created_at, coach_key_hash) VALUES (?1, ?2, ?3)",
-    )
-    .bind(&[
-        body.session_id.as_str().into(),
-        js_sys::Date::now().into(),
-        coach_key_hash.as_str().into(),
-    ])?
-    .run()
-    .await?;
+        db.prepare(
+            "INSERT OR IGNORE INTO sessions (id, created_at, coach_key_hash) VALUES (?1, ?2, ?3)",
+        )
+        .bind(&[
+            body.session_id.as_str().into(),
+            js_sys::Date::now().into(),
+            coach_key_hash.as_str().into(),
+        ])?
+        .run()
+        .await?;
 
-    // Insert events (batch)
-    let mut cursor = 0u32;
-    for env_event in &body.events {
-        let payload = serde_json::to_string(env_event).map_err(|e| Error::from(e.to_string()))?;
-        db.prepare("INSERT OR IGNORE INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)")
+        let mut cursor = 0u32;
+        for env_event in &body.events {
+            let payload =
+                serde_json::to_string(env_event).map_err(|e| Error::from(e.to_string()))?;
+            db.prepare(
+                "INSERT OR IGNORE INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)",
+            )
             .bind(&[
                 body.session_id.as_str().into(),
                 env_event.session_version.into(),
@@ -288,11 +334,33 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
             ])?
             .run()
             .await?;
-        cursor = cursor.max(env_event.session_version as u32);
-    }
+            cursor = cursor.max(env_event.session_version as u32);
+        }
 
-    // Generate share tokens if they don't exist yet
-    let (assistant_token, player_token) = get_or_create_tokens(&body.session_id, &db).await?;
+        let (assistant_token, player_token) = get_or_create_tokens(&body.session_id, &db).await?;
+        Ok::<(u32, String, String, String), Error>((
+            cursor,
+            assistant_token,
+            player_token,
+            coach_key,
+        ))
+    }
+    .await;
+
+    let (cursor, assistant_token, player_token, coach_key) = match upload_result {
+        Ok(result) => result,
+        Err(error) => {
+            return internal_api_error_response(
+                origin,
+                "POST /api/sessions",
+                &error,
+                serde_json::json!({
+                    "session_id": body.session_id,
+                    "event_count": body.events.len(),
+                }),
+            )
+        }
+    };
 
     ok_json(
         &UploadResponse {
