@@ -32,6 +32,99 @@ fn tab_class(active: bool) -> &'static str {
     }
 }
 
+fn browser_family_from_user_agent(user_agent: &str) -> &'static str {
+    let ua = user_agent.to_ascii_lowercase();
+    if ua.contains("edg/") {
+        "Edge"
+    } else if ua.contains("opr/") || ua.contains("opera") {
+        "Opera"
+    } else if ua.contains("firefox/") {
+        "Firefox"
+    } else if ua.contains("samsungbrowser/") {
+        "Samsung Internet"
+    } else if ua.contains("crios/") || ua.contains("chrome/") {
+        "Chrome"
+    } else if ua.contains("safari/") {
+        "Safari"
+    } else {
+        "Browser"
+    }
+}
+
+fn platform_family_from_user_agent(user_agent: &str) -> &'static str {
+    let ua = user_agent.to_ascii_lowercase();
+    if ua.contains("iphone") || ua.contains("ipad") || ua.contains("ipod") {
+        "iOS"
+    } else if ua.contains("android") {
+        "Android"
+    } else if ua.contains("mac os x") || ua.contains("macintosh") {
+        "macOS"
+    } else if ua.contains("windows") {
+        "Windows"
+    } else if ua.contains("linux") {
+        "Linux"
+    } else {
+        "Unknown OS"
+    }
+}
+
+fn form_factor_from_user_agent(user_agent: &str) -> &'static str {
+    let ua = user_agent.to_ascii_lowercase();
+    if ua.contains("mobile") || ua.contains("iphone") || ua.contains("android") {
+        "mobile"
+    } else if ua.contains("ipad") || ua.contains("tablet") {
+        "tablet"
+    } else {
+        "desktop"
+    }
+}
+
+/// Build a concise, privacy-safe device label from browser hints.
+/// Browsers do not expose the user-defined OS device name.
+fn build_human_device_label() -> String {
+    let Some(window) = web_sys::window() else {
+        return "Unknown device".to_string();
+    };
+
+    let navigator = window.navigator();
+    let user_agent = navigator.user_agent().ok().unwrap_or_default();
+
+    if user_agent.is_empty() {
+        return "Unknown device".to_string();
+    }
+
+    let browser = browser_family_from_user_agent(&user_agent);
+    let platform = platform_family_from_user_agent(&user_agent);
+    let form_factor = form_factor_from_user_agent(&user_agent);
+    let language = navigator.language();
+
+    let viewport = match (window.inner_width(), window.inner_height()) {
+        (Ok(w), Ok(h)) => {
+            let w = w.as_f64().unwrap_or_default().round() as i64;
+            let h = h.as_f64().unwrap_or_default().round() as i64;
+            if w > 0 && h > 0 {
+                Some(format!("{w}x{h}"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let mut parts = vec![format!("{browser} on {platform}"), form_factor.to_string()];
+    if let Some(size) = viewport {
+        parts.push(size);
+    }
+    if let Some(language) = language {
+        if !language.is_empty() {
+            parts.push(language);
+        }
+    }
+
+    let label = parts.join(" | ");
+    label.chars().take(96).collect()
+}
+
 // ── Dashboard page (parent + tab router) ─────────────────────────────────────
 
 #[component]
@@ -187,12 +280,14 @@ pub fn MatchesTab() -> impl IntoView {
                     None => return,
                 };
                 let rankings = manager.state.rankings.clone();
+                let existing_matches: Vec<_> = manager.state.matches.values().collect();
                 let starting_round = manager.state.current_round;
                 let num_rounds = config.scheduling_frequency as u32;
                 let scheduler = select_scheduler(&rankings);
                 let matches = scheduler.generate_schedule(
                     &active_players,
                     &rankings,
+                    &existing_matches,
                     &config,
                     &mut manager.rng,
                     starting_round,
@@ -1802,11 +1897,7 @@ pub fn OnlineTab() -> impl IntoView {
     // Device heartbeat: active coach devices seen in the last 5 minutes
     let active_devices: RwSignal<Vec<DeviceHeartbeat>> = RwSignal::new(vec![]);
     let device_id = get_or_create_device_id();
-    // Determine a human-readable device label (browser user agent trimmed)
-    let device_label = web_sys::window()
-        .and_then(|w| w.navigator().user_agent().ok())
-        .unwrap_or_default();
-    let device_label: String = device_label.chars().take(80).collect();
+    let device_label = build_human_device_label();
 
     // Heartbeat loop — pings every 60s while the session is online.
     let stop_hb = RwSignal::new(false);
@@ -2080,9 +2171,17 @@ pub fn OnlineTab() -> impl IntoView {
                                                 "Recovery PIN"
                                             </p>
                                             <p class="text-sm text-gray-400 mb-3">
-                                                "Set a 4–8 digit PIN so you can reload this session "
+                                                "Set a 4–8 digit PIN so you can reload this coach session "
                                                 "from another device if your main device runs out of power."
                                             </p>
+                                            <div class="mb-3 rounded-lg border border-gray-700/60 bg-gray-800/60 px-3 py-2">
+                                                <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                                                    "Session ID"
+                                                </p>
+                                                <p class="text-sm font-mono text-gray-200 break-all">
+                                                    {sync_for_pin.session_id.clone()}
+                                                </p>
+                                            </div>
                                             {move || {
                                                 let status = pin_status.get();
                                                 (!status.is_empty()).then(|| view! {
@@ -2191,8 +2290,8 @@ fn DeviceListCard(devices: RwSignal<Vec<DeviceHeartbeat>>) -> impl IntoView {
                                 let label = if d.label.is_empty() {
                                     d.device_id[..8.min(d.device_id.len())].to_string()
                                 } else {
-                                    // Trim to a readable length
-                                    d.label.chars().take(40).collect::<String>()
+                                    // Keep enough room to show browser + platform + viewport.
+                                    d.label.chars().take(72).collect::<String>()
                                 };
                                 view! {
                                     <li class="flex items-center justify-between text-sm gap-2">

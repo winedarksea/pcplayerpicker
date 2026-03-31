@@ -300,7 +300,9 @@ pub fn PlayerPage() -> impl IntoView {
                     player_list.sort_by(|a, b| a.name.cmp(&b.name));
 
                     // Validate persisted selection is still in this session.
-                    let selection = selected_player.get_untracked();
+                    // Track selection changes so choosing a player or clearing the
+                    // selection immediately re-renders without waiting for a poll.
+                    let selection = selected_player.get();
                     let valid_selection = selection.filter(|pid| state.players.contains_key(pid));
                     if valid_selection != selection {
                         selected_player.set(valid_selection);

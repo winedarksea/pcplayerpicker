@@ -10,19 +10,19 @@
   <!-- Rounded dark navy background -->
   <rect width="512" height="512" rx="120" fill="url(#bg)"/>
 
-  <!-- Top bar (widest) — 4 dots evenly spaced at 160, 224, 288, 352 (gap=64) -->
-  <rect x="72" y="96" width="368" height="76" rx="38" fill="#1e293b"/>
-  <circle cx="160" cy="134" r="22" fill="#5eead4"/>
-  <circle cx="224" cy="134" r="22" fill="#5eead4"/>
-  <circle cx="288" cy="134" r="22" fill="#fbbf24"/>
-  <circle cx="352" cy="134" r="22" fill="#fbbf24"/>
+  <!-- Top bar (widest) — 4 dots evenly spaced -->
+  <rect x="26" y="56" width="460" height="96" rx="48" fill="#1e293b"/>
+  <circle cx="152" cy="104" r="30" fill="#5eead4"/>
+  <circle cx="218" cy="104" r="30" fill="#5eead4"/>
+  <circle cx="294" cy="104" r="30" fill="#fbbf24"/>
+  <circle cx="360" cy="104" r="30" fill="#fbbf24"/>
 
-  <!-- Middle bar — 2 dots at 224, 288 (gap=64, matching top bar inner spacing) -->
-  <rect x="120" y="216" width="272" height="76" rx="38" fill="#1e293b"/>
-  <circle cx="224" cy="254" r="22" fill="#5eead4"/>
-  <circle cx="288" cy="254" r="22" fill="#fbbf24"/>
+  <!-- Middle bar — 2 dots -->
+  <rect x="106" y="208" width="300" height="96" rx="48" fill="#1e293b"/>
+  <circle cx="218" cy="256" r="30" fill="#5eead4"/>
+  <circle cx="294" cy="256" r="30" fill="#fbbf24"/>
 
-  <!-- Bottom bar (narrowest) — 1 merged dot at center -->
-  <rect x="176" y="336" width="160" height="76" rx="38" fill="#1e293b"/>
-  <circle cx="256" cy="374" r="22" fill="#34d399"/>
+  <!-- Bottom bar (narrowest) — 1 dot at center -->
+  <rect x="170" y="360" width="172" height="96" rx="48" fill="#1e293b"/>
+  <circle cx="256" cy="408" r="30" fill="#34d399"/>
 </svg>

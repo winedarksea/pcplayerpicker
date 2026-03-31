@@ -1,14 +1,20 @@
+use super::match_candidate::{
+    evaluate_candidate_match_score, player_ids_for_indices, visit_unique_team_partitions,
+    MatchExposureHistory,
+};
 /// Round-robin scheduler for cold start (no ranking data yet).
 ///
 /// Uses the circle algorithm to generate balanced pairings where every player
 /// faces every other player an equal number of times over the full rotation.
-/// Teams within each match are assigned to balance total player exposure.
+/// Teams within each match are assigned by searching all unique partitions and
+/// picking the one with the lowest repeat-exposure penalty.
 use super::Scheduler;
 use crate::models::{
     MatchId, MatchStatus, Player, PlayerRanking, RoundNumber, ScheduledMatch, SessionConfig,
 };
 use crate::rng::SessionRng;
 use rand::seq::SliceRandom;
+use std::collections::HashMap;
 
 pub struct RoundRobinScheduler;
 
@@ -17,6 +23,7 @@ impl Scheduler for RoundRobinScheduler {
         &self,
         players: &[Player],
         _rankings: &[PlayerRanking],
+        existing_matches: &[&ScheduledMatch],
         config: &SessionConfig,
         rng: &mut SessionRng,
         starting_round: RoundNumber,
@@ -32,6 +39,19 @@ impl Scheduler for RoundRobinScheduler {
 
         let mut all_matches = Vec::new();
         let mut match_id_counter = starting_round.0 * 1000; // unique IDs per round block
+        let mut projected_exposure_history = MatchExposureHistory::from_matches(existing_matches);
+        let ranking_snapshot_by_player_id: HashMap<_, _> = players
+            .iter()
+            .map(|player| {
+                (
+                    player.id,
+                    super::match_candidate::RankingSnapshot {
+                        rating: 0.0,
+                        uncertainty: 1.0,
+                    },
+                )
+            })
+            .collect();
 
         // Shuffle player IDs for this schedule generation (deterministic via seeded RNG)
         let mut rand_engine = rng.make_rng();
@@ -46,7 +66,16 @@ impl Scheduler for RoundRobinScheduler {
                 team_size,
                 round,
                 &mut match_id_counter,
+                &projected_exposure_history,
+                &ranking_snapshot_by_player_id,
             );
+            for scheduled_match in &round_matches {
+                projected_exposure_history.record_match(
+                    scheduled_match.team_a.as_slice(),
+                    scheduled_match.team_b.as_slice(),
+                    round,
+                );
+            }
             all_matches.extend(round_matches);
 
             // Rotate player_ids for next round (circle algorithm)
@@ -66,6 +95,11 @@ fn generate_round(
     team_size: usize,
     round: RoundNumber,
     match_id_counter: &mut u32,
+    exposure_history: &MatchExposureHistory,
+    ranking_snapshot_by_player_id: &HashMap<
+        crate::models::PlayerId,
+        super::match_candidate::RankingSnapshot,
+    >,
 ) -> Vec<ScheduledMatch> {
     let players_per_match = 2 * team_size;
     let mut matches = Vec::new();
@@ -74,14 +108,14 @@ fn generate_round(
     let mut i = 0;
     while i + players_per_match <= player_order.len() {
         let group: Vec<usize> = player_order[i..i + players_per_match].to_vec();
-        let team_a: Vec<_> = group[..team_size]
-            .iter()
-            .map(|&idx| players[idx].id)
-            .collect();
-        let team_b: Vec<_> = group[team_size..]
-            .iter()
-            .map(|&idx| players[idx].id)
-            .collect();
+        let (team_a, team_b) = best_team_partition_for_round_robin_group(
+            players,
+            &group,
+            team_size,
+            exposure_history,
+            ranking_snapshot_by_player_id,
+            round,
+        );
 
         matches.push(ScheduledMatch {
             id: MatchId(*match_id_counter),
@@ -98,6 +132,43 @@ fn generate_round(
     }
 
     matches
+}
+
+fn best_team_partition_for_round_robin_group(
+    players: &[Player],
+    group: &[usize],
+    team_size: usize,
+    exposure_history: &MatchExposureHistory,
+    ranking_snapshot_by_player_id: &HashMap<
+        crate::models::PlayerId,
+        super::match_candidate::RankingSnapshot,
+    >,
+    round: RoundNumber,
+) -> (Vec<crate::models::PlayerId>, Vec<crate::models::PlayerId>) {
+    let mut best_team_a = player_ids_for_indices(players, &group[..team_size]);
+    let mut best_team_b = player_ids_for_indices(players, &group[team_size..]);
+    let mut best_score = f64::NEG_INFINITY;
+
+    visit_unique_team_partitions(group, team_size, |team_a_indices, team_b_indices| {
+        let team_a = player_ids_for_indices(players, team_a_indices);
+        let team_b = player_ids_for_indices(players, team_b_indices);
+        let candidate_score = evaluate_candidate_match_score(
+            team_a.as_slice(),
+            team_b.as_slice(),
+            ranking_snapshot_by_player_id,
+            exposure_history,
+            round,
+        )
+        .total_score;
+
+        if candidate_score > best_score {
+            best_score = candidate_score;
+            best_team_a = team_a;
+            best_team_b = team_b;
+        }
+    });
+
+    (best_team_a, best_team_b)
 }
 
 #[cfg(test)]
@@ -125,7 +196,7 @@ mod tests {
         let session_id = config.id.clone();
         let mut rng = SessionRng::new(&session_id);
         let matches =
-            scheduler.generate_schedule(&players, &[], &config, &mut rng, RoundNumber(1), 1);
+            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng, RoundNumber(1), 1);
         // 8 players / (2*2 per match) = 2 matches per round
         assert_eq!(matches.len(), 2);
     }
@@ -138,7 +209,7 @@ mod tests {
         let session_id = config.id.clone();
         let mut rng = SessionRng::new(&session_id);
         let matches =
-            scheduler.generate_schedule(&players, &[], &config, &mut rng, RoundNumber(1), 1);
+            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng, RoundNumber(1), 1);
 
         let mut seen = std::collections::HashSet::new();
         for m in &matches {
@@ -162,8 +233,10 @@ mod tests {
         let mut rng1 = SessionRng::new(&session_id);
         let mut rng2 = SessionRng::new(&session_id);
 
-        let m1 = scheduler.generate_schedule(&players, &[], &config, &mut rng1, RoundNumber(1), 3);
-        let m2 = scheduler.generate_schedule(&players, &[], &config, &mut rng2, RoundNumber(1), 3);
+        let m1 =
+            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng1, RoundNumber(1), 3);
+        let m2 =
+            scheduler.generate_schedule(&players, &[], &[], &config, &mut rng2, RoundNumber(1), 3);
 
         let ids1: Vec<_> = m1
             .iter()
@@ -174,5 +247,42 @@ mod tests {
             .flat_map(|m| m.team_a.iter().chain(m.team_b.iter()))
             .collect();
         assert_eq!(ids1, ids2);
+    }
+
+    #[test]
+    fn avoids_repeating_same_teammates_when_history_exists() {
+        let scheduler = RoundRobinScheduler;
+        let players = make_players(4);
+        let config = SessionConfig::new(2, 1, Sport::Soccer);
+        let session_id = config.id.clone();
+        let mut rng = SessionRng::new(&session_id);
+        let prior_match = ScheduledMatch {
+            id: MatchId(7),
+            round: RoundNumber(1),
+            field: 1,
+            team_a: vec![PlayerId(1), PlayerId(2)],
+            team_b: vec![PlayerId(3), PlayerId(4)],
+            status: MatchStatus::Completed,
+        };
+
+        let matches = scheduler.generate_schedule(
+            &players,
+            &[],
+            &[&prior_match],
+            &config,
+            &mut rng,
+            RoundNumber(2),
+            1,
+        );
+
+        assert_eq!(matches.len(), 1);
+        let repeated_teammates = matches[0].team_a == prior_match.team_a
+            || matches[0].team_a == prior_match.team_b
+            || matches[0].team_b == prior_match.team_a
+            || matches[0].team_b == prior_match.team_b;
+        assert!(
+            !repeated_teammates,
+            "round-robin should avoid identical team splits"
+        );
     }
 }

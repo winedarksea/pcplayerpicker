@@ -226,9 +226,26 @@ impl GoalModelEngine {
             Some(c) => c,
             None => {
                 // Fallback: diagonal with MAP estimates (no uncertainty)
+                let mut deterministic_order: Vec<(usize, f64)> = (0..n)
+                    .map(|index| (index, posterior.theta_map[index]))
+                    .collect();
+                deterministic_order.sort_by(|left, right| {
+                    right
+                        .1
+                        .partial_cmp(&left.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let deterministic_rank_by_player: HashMap<usize, u32> = deterministic_order
+                    .iter()
+                    .enumerate()
+                    .map(|(rank_index, (player_index, _))| (*player_index, rank_index as u32 + 1))
+                    .collect();
+
                 for (i, ranks) in player_ranks.iter_mut().enumerate() {
+                    let deterministic_rank =
+                        deterministic_rank_by_player.get(&i).copied().unwrap_or(1);
                     for _ in 0..n_samples {
-                        ranks.push(i as u32 + 1);
+                        ranks.push(deterministic_rank);
                     }
                 }
                 return player_ranks;
@@ -278,16 +295,16 @@ impl RankingEngine for GoalModelEngine {
     ) -> Vec<PlayerRanking> {
         let n = players.len();
 
-        // Default: uniform uncertainty, all tied at rank 1
+        // Default: uniform uncertainty and no evidence-based ordering.
+        // Use a shared top rank rather than leaking input order into the UI.
         let prior_var = self.prior_sigma.powi(2);
         let default_rankings: Vec<PlayerRanking> = players
             .iter()
-            .enumerate()
-            .map(|(i, p)| PlayerRanking {
+            .map(|p| PlayerRanking {
                 player_id: p.id,
                 rating: 0.0,
                 uncertainty: prior_var.sqrt(),
-                rank: i as u32 + 1,
+                rank: 1,
                 rank_range_90: (1, n as u32),
                 matches_played: 0,
                 total_goals: 0,
@@ -322,11 +339,11 @@ impl RankingEngine for GoalModelEngine {
                         player_id: player.id,
                         rating: 0.0,
                         uncertainty: prior_var.sqrt(),
-                        rank: n as u32,
+                        rank: 1,
                         rank_range_90: (1, n as u32),
                         matches_played: 0,
                         total_goals: 0,
-                        prob_top_k: 0.0,
+                        prob_top_k: 1.0 / n as f64,
                         is_active: player.status == crate::models::PlayerStatus::Active,
                     };
                 };
@@ -527,5 +544,101 @@ mod tests {
             r1.rating,
             r2.rating
         );
+    }
+
+    #[test]
+    fn player_who_sits_out_odd_player_round_keeps_neutral_stats_and_rank() {
+        use std::collections::HashMap;
+
+        let engine = GoalModelEngine::default();
+        let config = make_config();
+        let players: Vec<Player> = (1..=9)
+            .map(|id| make_player(id, &format!("P{id}")))
+            .collect();
+
+        let scheduled_matches = vec![
+            ScheduledMatch {
+                id: MatchId(1),
+                round: RoundNumber(1),
+                field: 1,
+                team_a: vec![PlayerId(1), PlayerId(2)],
+                team_b: vec![PlayerId(3), PlayerId(4)],
+                status: crate::models::MatchStatus::Completed,
+            },
+            ScheduledMatch {
+                id: MatchId(2),
+                round: RoundNumber(1),
+                field: 2,
+                team_a: vec![PlayerId(5), PlayerId(6)],
+                team_b: vec![PlayerId(7), PlayerId(8)],
+                status: crate::models::MatchStatus::Completed,
+            },
+        ];
+        let matches_by_id: HashMap<MatchId, ScheduledMatch> = scheduled_matches
+            .into_iter()
+            .map(|scheduled_match| (scheduled_match.id, scheduled_match))
+            .collect();
+
+        let results = vec![
+            MatchResult {
+                match_id: MatchId(1),
+                scores: HashMap::from([
+                    (PlayerId(1), PlayerMatchScore::scored(2)),
+                    (PlayerId(2), PlayerMatchScore::scored(1)),
+                    (PlayerId(3), PlayerMatchScore::scored(0)),
+                    (PlayerId(4), PlayerMatchScore::scored(0)),
+                ]),
+                duration_multiplier: 1.0,
+                entered_by: Role::Coach,
+            },
+            MatchResult {
+                match_id: MatchId(2),
+                scores: HashMap::from([
+                    (PlayerId(5), PlayerMatchScore::scored(1)),
+                    (PlayerId(6), PlayerMatchScore::scored(1)),
+                    (PlayerId(7), PlayerMatchScore::scored(0)),
+                    (PlayerId(8), PlayerMatchScore::scored(0)),
+                ]),
+                duration_multiplier: 1.0,
+                entered_by: Role::Coach,
+            },
+        ];
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+
+        let rankings =
+            engine.compute_ratings(&players, &result_refs, Some(&matches_by_id), &config);
+
+        let benched_player_ranking = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(9))
+            .unwrap();
+
+        assert_eq!(benched_player_ranking.matches_played, 0);
+        assert_eq!(benched_player_ranking.total_goals, 0);
+
+        println!(
+            "Benched player ranking after round one: rank={}, rating={:.3}, uncertainty={:.3}, range={:?}",
+            benched_player_ranking.rank,
+            benched_player_ranking.rating,
+            benched_player_ranking.uncertainty,
+            benched_player_ranking.rank_range_90
+        );
+    }
+
+    #[test]
+    fn no_result_default_rankings_do_not_assign_arbitrary_order() {
+        let engine = GoalModelEngine::default();
+        let config = make_config();
+        let players: Vec<Player> = (1..=5)
+            .map(|id| make_player(id, &format!("P{id}")))
+            .collect();
+
+        let rankings = engine.compute_ratings(&players, &[], None, &config);
+
+        assert_eq!(rankings.len(), 5);
+        assert!(rankings.iter().all(|ranking| ranking.rank == 1));
+        assert!(rankings
+            .iter()
+            .all(|ranking| ranking.rank_range_90 == (1, 5)));
     }
 }

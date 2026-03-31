@@ -97,12 +97,14 @@ fn full_offline_simulation_converges() {
         let players: Vec<Player> = manager.state.active_players().cloned().collect();
         let rankings = manager.state.rankings.clone();
         let config = manager.state.config.clone().unwrap();
+        let existing_matches: Vec<_> = manager.state.matches.values().collect();
 
         let scheduler = select_scheduler(&rankings);
         let start_round = RoundNumber(round as u32 + 1);
         let scheduled = scheduler.generate_schedule(
             &players,
             &rankings,
+            &existing_matches,
             &config,
             &mut manager.rng,
             start_round,
@@ -294,12 +296,27 @@ fn rng_is_deterministic() {
     let players: Vec<Player> = m1.state.players.values().cloned().collect();
     let config1 = m1.state.config.clone().unwrap();
     let config2 = m2.state.config.clone().unwrap();
+    let existing_matches: Vec<&ScheduledMatch> = Vec::new();
 
     let scheduler = select_scheduler(&[]);
-    let sched1 =
-        scheduler.generate_schedule(&players, &[], &config1, &mut m1.rng, RoundNumber(1), 1);
-    let sched2 =
-        scheduler.generate_schedule(&players, &[], &config2, &mut m2.rng, RoundNumber(1), 1);
+    let sched1 = scheduler.generate_schedule(
+        &players,
+        &[],
+        &existing_matches,
+        &config1,
+        &mut m1.rng,
+        RoundNumber(1),
+        1,
+    );
+    let sched2 = scheduler.generate_schedule(
+        &players,
+        &[],
+        &existing_matches,
+        &config2,
+        &mut m2.rng,
+        RoundNumber(1),
+        1,
+    );
 
     // Same seed → same schedule
     assert_eq!(

@@ -1,4 +1,5 @@
 pub mod info_max;
+pub(crate) mod match_candidate;
 pub mod round_robin;
 
 use crate::models::{Player, PlayerRanking, RoundNumber, ScheduledMatch, SessionConfig};
@@ -14,6 +15,7 @@ pub trait Scheduler {
         &self,
         players: &[Player],
         rankings: &[PlayerRanking],
+        existing_matches: &[&ScheduledMatch],
         config: &SessionConfig,
         rng: &mut SessionRng,
         starting_round: RoundNumber,
