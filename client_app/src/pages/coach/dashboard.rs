@@ -41,7 +41,7 @@ fn select_input_text_on_focus(ev: leptos::ev::FocusEvent) {
     let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() else {
         return;
     };
-    let _ = input.select();
+    input.select();
 }
 
 // ── Dashboard page (parent + tab router) ─────────────────────────────────────
