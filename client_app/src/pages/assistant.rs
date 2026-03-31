@@ -4,6 +4,7 @@
 //! Score submission posts events directly to the worker API.
 
 use crate::meta::use_page_meta;
+use crate::read_only_sync::{next_read_only_poll_interval_ms, READ_ONLY_POLL_INTERVAL_MS};
 use crate::sync::{api_base, auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, Event, EventLog};
 use app_core::models::{MatchResult, MatchStatus, PlayerMatchScore, Role};
@@ -12,26 +13,54 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
 
-const POLL_INTERVAL_MS: u32 = 10_000;
+fn document_is_hidden() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Some(document) = window.document() else {
+        return false;
+    };
+
+    js_sys::Reflect::get(
+        document.as_ref(),
+        &wasm_bindgen::JsValue::from_str("hidden"),
+    )
+    .ok()
+    .and_then(|value| value.as_bool())
+    .unwrap_or(false)
+}
 
 async fn pull_latest_into_log(
     session_id: &str,
     log: RwSignal<Option<EventLog>>,
     error_msg: RwSignal<String>,
+    refresh_in_flight: RwSignal<bool>,
     show_errors: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    if refresh_in_flight.get_untracked() {
+        return Ok(false);
+    }
+    refresh_in_flight.set(true);
+
     let since = log
         .get_untracked()
         .as_ref()
         .and_then(|l| l.all().last().map(|ev| ev.session_version as u32))
         .unwrap_or(0);
 
-    let resp = pull_events(session_id, since).await?;
+    let resp = match pull_events(session_id, since).await {
+        Ok(resp) => resp,
+        Err(error) => {
+            refresh_in_flight.set(false);
+            return Err(error);
+        }
+    };
     if resp.events.is_empty() {
+        refresh_in_flight.set(false);
         if show_errors {
             error_msg.set(String::new());
         }
-        return Ok(());
+        return Ok(false);
     }
 
     let new_events = resp.events;
@@ -46,7 +75,8 @@ async fn pull_latest_into_log(
     if show_errors {
         error_msg.set(String::new());
     }
-    Ok(())
+    refresh_in_flight.set(false);
+    Ok(true)
 }
 
 #[component]
@@ -64,6 +94,8 @@ pub fn AssistantPage() -> impl IntoView {
     let log: RwSignal<Option<EventLog>> = RwSignal::new(None);
     let error_msg: RwSignal<String> = RwSignal::new(String::new());
     let is_loading = RwSignal::new(true);
+    let refresh_in_flight = RwSignal::new(false);
+    let poll_interval_ms = RwSignal::new(READ_ONLY_POLL_INTERVAL_MS);
 
     // PIN gate signals
     let requires_pin = RwSignal::new(false);
@@ -94,7 +126,8 @@ pub fn AssistantPage() -> impl IntoView {
             return;
         }
         session_id.set(info.session_id.clone());
-        match pull_latest_into_log(&info.session_id, log, error_msg, true).await {
+        match pull_latest_into_log(&info.session_id, log, error_msg, refresh_in_flight, true).await
+        {
             Ok(_) => is_loading.set(false),
             Err(e) => {
                 error_msg.set(format!("Failed to load session: {e}"));
@@ -109,18 +142,27 @@ pub fn AssistantPage() -> impl IntoView {
     });
     leptos::task::spawn_local(async move {
         loop {
-            TimeoutFuture::new(POLL_INTERVAL_MS).await;
+            let delay_ms = poll_interval_ms.get_untracked();
+            TimeoutFuture::new(delay_ms).await;
             if stop_polling.get_untracked() {
                 break;
             }
             if is_loading.get_untracked() || requires_pin.get_untracked() {
                 continue;
             }
+            if document_is_hidden() {
+                continue;
+            }
             let sid = session_id.get_untracked();
             if sid.is_empty() {
                 continue;
             }
-            let _ = pull_latest_into_log(&sid, log, error_msg, false).await;
+            match pull_latest_into_log(&sid, log, error_msg, refresh_in_flight, false).await {
+                Ok(saw_new_events) => {
+                    poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, saw_new_events))
+                }
+                Err(_) => poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, false)),
+            }
         }
     });
 
@@ -139,8 +181,16 @@ pub fn AssistantPage() -> impl IntoView {
                             if sid.is_empty() || is_loading.get_untracked() {
                                 return;
                             }
+                            poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
                             leptos::task::spawn_local(async move {
-                                let _ = pull_latest_into_log(&sid, log, error_msg, true).await;
+                                let _ = pull_latest_into_log(
+                                    &sid,
+                                    log,
+                                    error_msg,
+                                    refresh_in_flight,
+                                    true,
+                                )
+                                .await;
                             });
                         }
                     >
@@ -196,6 +246,7 @@ pub fn AssistantPage() -> impl IntoView {
                                             let tok2 = tok_val.clone();
                                             is_loading.set(true);
                                             requires_pin.set(false);
+                                            poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
                                             leptos::task::spawn_local(async move {
                                                 match auth_token(&tok2, &pin).await {
                                                     Ok(info) => {
@@ -205,7 +256,14 @@ pub fn AssistantPage() -> impl IntoView {
                                                             return;
                                                         }
                                                         session_id.set(info.session_id.clone());
-                                                        match pull_latest_into_log(&info.session_id, log, error_msg, true).await {
+                                                        match pull_latest_into_log(
+                                                            &info.session_id,
+                                                            log,
+                                                            error_msg,
+                                                            refresh_in_flight,
+                                                            true,
+                                                        )
+                                                        .await {
                                                             Ok(_) => {
                                                                 is_loading.set(false);
                                                             }

@@ -84,9 +84,15 @@ impl SyncState {
 }
 
 const SYNC_KEY_PREFIX: &str = "pcpp_sync_";
+const TOKEN_INFO_CACHE_PREFIX: &str = "pcpp_token_info_";
+const TOKEN_INFO_CACHE_TTL_MS: f64 = 12.0 * 60.0 * 60.0 * 1000.0;
 
 fn sync_key(session_id: &str) -> String {
     format!("{SYNC_KEY_PREFIX}{session_id}")
+}
+
+fn token_info_cache_key(token: &str) -> String {
+    format!("{TOKEN_INFO_CACHE_PREFIX}{token}")
 }
 
 pub fn load_sync_state(session_id: &str) -> Option<SyncState> {
@@ -100,6 +106,47 @@ pub fn save_sync_state(state: &SyncState) {
     if let Ok(json) = serde_json::to_string(state) {
         crate::state::storage_set(&key, &json);
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct CachedTokenInfo {
+    session_id: String,
+    role: String,
+    expires_at_ms: f64,
+}
+
+fn load_cached_token_info(token: &str) -> Option<TokenInfo> {
+    let key = token_info_cache_key(token);
+    let raw = crate::state::storage_get(&key)?;
+    let cached: CachedTokenInfo = serde_json::from_str(&raw).ok()?;
+    if cached.expires_at_ms <= js_sys::Date::now() {
+        crate::state::storage_remove(&key);
+        return None;
+    }
+    Some(TokenInfo {
+        session_id: cached.session_id,
+        role: cached.role,
+        requires_pin: false,
+    })
+}
+
+fn save_cached_token_info(token: &str, info: &TokenInfo) {
+    if info.requires_pin || info.session_id.is_empty() || info.role.is_empty() {
+        return;
+    }
+
+    let cached = CachedTokenInfo {
+        session_id: info.session_id.clone(),
+        role: info.role.clone(),
+        expires_at_ms: js_sys::Date::now() + TOKEN_INFO_CACHE_TTL_MS,
+    };
+    if let Ok(json) = serde_json::to_string(&cached) {
+        crate::state::storage_set(&token_info_cache_key(token), &json);
+    }
+}
+
+fn clear_cached_token_info(token: &str) {
+    crate::state::storage_remove(&token_info_cache_key(token));
 }
 
 // ── Upload response ───────────────────────────────────────────────────────────
@@ -328,9 +375,19 @@ pub async fn pull_events(session_id: &str, since: u32) -> Result<EventsResponse,
 /// Resolve a share token to session_id + role.
 /// If `requires_pin` is true in the response, the caller must use `auth_token`.
 pub async fn resolve_token(token: &str) -> Result<TokenInfo, String> {
+    if let Some(info) = load_cached_token_info(token) {
+        return Ok(info);
+    }
+
     let url = format!("{}/api/t/{}", api_base(), token);
     let resp_val = fetch_json(&url, "GET", None, None).await?;
-    serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())
+    let info: TokenInfo = serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
+    if info.requires_pin {
+        clear_cached_token_info(token);
+    } else {
+        save_cached_token_info(token, &info);
+    }
+    Ok(info)
 }
 
 /// Authenticate a PIN-protected share token, returning session_id + role on success.
@@ -348,7 +405,9 @@ pub async fn set_token_pin(token: &str, pin: &str) -> Result<(), String> {
     let url = format!("{}/api/t/{}/pin", api_base(), token);
     fetch_json(&url, "POST", Some(body.to_string()), None)
         .await
-        .map(|_| ())
+        .map(|_| {
+            clear_cached_token_info(token);
+        })
 }
 
 /// Set or update the coach recovery PIN for a session in D1.
@@ -408,28 +467,26 @@ pub struct DeviceHeartbeat {
     pub last_seen: f64,
 }
 
-/// Record this device's presence on the server. Fire-and-forget.
+#[derive(Deserialize)]
+struct DeviceHeartbeatResponse {
+    #[serde(default)]
+    devices: Vec<DeviceHeartbeat>,
+}
+
+/// Record this device's presence on the server and return the active device list.
 ///
 /// `device_id` should be a stable UUID stored in localStorage.
 /// `label` is an optional human-readable string (e.g. "iPhone 15 · Safari").
-pub async fn send_heartbeat(sync: &SyncState, device_id: &str, label: &str) -> Result<(), String> {
+pub async fn send_heartbeat(
+    sync: &SyncState,
+    device_id: &str,
+    label: &str,
+) -> Result<Vec<DeviceHeartbeat>, String> {
     let body = serde_json::json!({ "device_id": device_id, "label": label });
     let url = format!("{}/api/sessions/{}/heartbeat", api_base(), sync.session_id);
-    fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key))
-        .await
-        .map(|_| ())
-}
-
-/// Fetch the list of devices that have sent a heartbeat in the last 5 minutes.
-pub async fn fetch_active_devices(sync: &SyncState) -> Result<Vec<DeviceHeartbeat>, String> {
-    let url = format!("{}/api/sessions/{}/heartbeat", api_base(), sync.session_id);
-    let resp_val = fetch_json(&url, "GET", None, Some(&sync.coach_key)).await?;
-
-    #[derive(Deserialize)]
-    struct Resp {
-        devices: Vec<DeviceHeartbeat>,
-    }
-    let resp: Resp = serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
+    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
+    let resp: DeviceHeartbeatResponse =
+        serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
     Ok(resp.devices)
 }
 

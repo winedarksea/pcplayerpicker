@@ -1058,7 +1058,22 @@ async fn handle_heartbeat_post(
     .run()
     .await?;
 
-    ok_json(&serde_json::json!({ "ok": true }), origin)
+    let active_threshold = now - 5.0 * 60.0 * 1000.0;
+    let rows = db
+        .prepare(
+            "SELECT device_id, label, last_seen FROM device_heartbeats \
+             WHERE session_id = ?1 AND last_seen >= ?2 \
+             ORDER BY last_seen DESC",
+        )
+        .bind(&[session_id.into(), d1_number(active_threshold)])?
+        .all()
+        .await?;
+
+    let devices: Vec<serde_json::Value> = rows.results()?;
+    ok_json(
+        &serde_json::json!({ "ok": true, "devices": devices }),
+        origin,
+    )
 }
 
 /// GET /api/sessions/:id/heartbeat

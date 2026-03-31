@@ -1,8 +1,8 @@
 use crate::meta::use_page_meta;
 use crate::state::{get_or_create_device_id, load_session, save_session, AppContext};
 use crate::sync::{
-    fetch_active_devices, go_online, load_sync_state, push_new_events, push_session_archive,
-    send_heartbeat, set_recovery_pin, set_token_pin, DeviceHeartbeat, SessionArchive, SyncState,
+    go_online, load_sync_state, push_new_events, push_session_archive, send_heartbeat,
+    set_recovery_pin, set_token_pin, DeviceHeartbeat, SessionArchive, SyncState,
 };
 /// Coach dashboard — tab layout driven by a `:tab` URL param.
 ///
@@ -19,6 +19,8 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
+
+const COACH_HEARTBEAT_INTERVAL_MS: u32 = 5 * 60_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1899,7 +1901,7 @@ pub fn OnlineTab() -> impl IntoView {
     let device_id = get_or_create_device_id();
     let device_label = build_human_device_label();
 
-    // Heartbeat loop — pings every 60s while the session is online.
+    // Heartbeat loop — pings every 5 minutes while the session is online.
     let stop_hb = RwSignal::new(false);
     on_cleanup(move || stop_hb.set(true));
     {
@@ -1908,13 +1910,12 @@ pub fn OnlineTab() -> impl IntoView {
         leptos::task::spawn_local(async move {
             use gloo_timers::future::TimeoutFuture;
             loop {
-                TimeoutFuture::new(60_000).await;
+                TimeoutFuture::new(COACH_HEARTBEAT_INTERVAL_MS).await;
                 if stop_hb.get_untracked() {
                     break;
                 }
                 if let Some(state) = sync.get_untracked() {
-                    let _ = send_heartbeat(&state, &device_id, &device_label).await;
-                    if let Ok(devices) = fetch_active_devices(&state).await {
+                    if let Ok(devices) = send_heartbeat(&state, &device_id, &device_label).await {
                         active_devices.set(devices);
                     }
                 }
@@ -1932,8 +1933,7 @@ pub fn OnlineTab() -> impl IntoView {
                 let device_id = device_id.clone();
                 let device_label = device_label.clone();
                 leptos::task::spawn_local(async move {
-                    let _ = send_heartbeat(&state, &device_id, &device_label).await;
-                    if let Ok(devices) = fetch_active_devices(&state).await {
+                    if let Ok(devices) = send_heartbeat(&state, &device_id, &device_label).await {
                         active_devices.set(devices);
                     }
                 });
@@ -1999,8 +1999,10 @@ pub fn OnlineTab() -> impl IntoView {
         }
     };
 
-    let on_sync = {
+    let on_sync = StoredValue::new({
         let ctx = ctx.clone();
+        let device_id = device_id.clone();
+        let device_label = device_label.clone();
         move |_| {
             let events = ctx
                 .session
@@ -2031,10 +2033,17 @@ pub fn OnlineTab() -> impl IntoView {
             if let Some(events) = events {
                 if let Some(mut state) = sync.get_untracked() {
                     online_error.set(String::new());
+                    let device_id = device_id.clone();
+                    let device_label = device_label.clone();
                     leptos::task::spawn_local(async move {
                         if let Err(e) = push_new_events(&mut state, &events).await {
                             online_error.set(format!("Sync failed: {e}"));
                         } else {
+                            if let Ok(devices) =
+                                send_heartbeat(&state, &device_id, &device_label).await
+                            {
+                                active_devices.set(devices);
+                            }
                             // Best-effort: push archive snapshot so final results survive
                             // the raw event retention window. Errors are silently ignored.
                             if let Some(arch) = archive {
@@ -2046,7 +2055,7 @@ pub fn OnlineTab() -> impl IntoView {
                 }
             }
         }
-    };
+    });
 
     view! {
         <div class="px-4 py-5">
@@ -2112,7 +2121,7 @@ pub fn OnlineTab() -> impl IntoView {
                                     class="w-full py-3 bg-gray-800 hover:bg-gray-700 \
                                            text-white font-medium rounded-xl transition-colors \
                                            min-h-[48px] border border-gray-700/50"
-                                    on:click=on_sync
+                                    on:click=move |ev| on_sync.with_value(|handler| handler(ev))
                                 >
                                     "Push Latest Events"
                                 </button>
