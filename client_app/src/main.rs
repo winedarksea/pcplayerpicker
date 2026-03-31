@@ -1,3 +1,4 @@
+mod coach_sync;
 mod meta;
 mod pages;
 mod read_only_cache;

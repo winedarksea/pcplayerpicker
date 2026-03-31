@@ -1,3 +1,4 @@
+use crate::coach_sync::pull_assistant_score_events;
 use crate::meta::use_page_meta;
 use crate::state::{load_session, save_session, AppContext};
 use crate::sync::{
@@ -1799,7 +1800,9 @@ pub fn OnlineTab() -> impl IntoView {
     // Sync state loaded from localStorage; updated when "Go Online" succeeds
     let sync: RwSignal<Option<SyncState>> = RwSignal::new(None);
     let is_going_online = RwSignal::new(false);
+    let is_pulling_assistant_results = RwSignal::new(false);
     let online_error = RwSignal::new(String::new());
+    let assistant_pull_status = RwSignal::new(String::new());
 
     // Coach recovery PIN signals
     let pin_input = RwSignal::new(String::new());
@@ -1908,6 +1911,60 @@ pub fn OnlineTab() -> impl IntoView {
         }
     });
 
+    let on_pull_assistant_results = StoredValue::new({
+        let ctx = ctx.clone();
+        move |_| {
+            let Some(sync_state) = sync.get_untracked() else {
+                return;
+            };
+            let local_events = ctx
+                .session
+                .with(|session| session.as_ref().map(|manager| manager.log.all().to_vec()));
+            let Some(local_events) = local_events else {
+                return;
+            };
+
+            is_pulling_assistant_results.set(true);
+            online_error.set(String::new());
+            assistant_pull_status.set(String::new());
+
+            leptos::task::spawn_local(async move {
+                match pull_assistant_score_events(sync_state, &local_events).await {
+                    Ok(pulled) => {
+                        let imported_count = pulled.assistant_score_events.len();
+                        let updated_sync_state = pulled.updated_sync_state;
+                        ctx.session.update(|session| {
+                            let Some(manager) = session else {
+                                return;
+                            };
+                            for payload in pulled.assistant_score_events {
+                                manager.log.append(payload, Role::Assistant);
+                            }
+                            manager.state = materialize(&manager.log);
+                            save_session(manager);
+                        });
+                        sync.set(Some(updated_sync_state));
+                        assistant_pull_status.set(if imported_count == 0 {
+                            if pulled.new_server_events_seen == 0 {
+                                "No new server updates.".to_string()
+                            } else {
+                                "No new assistant-entered scores found.".to_string()
+                            }
+                        } else if imported_count == 1 {
+                            "Pulled 1 assistant-entered score.".to_string()
+                        } else {
+                            format!("Pulled {imported_count} assistant-entered scores.")
+                        });
+                    }
+                    Err(error) => {
+                        online_error.set(format!("Pull failed: {error}"));
+                    }
+                }
+                is_pulling_assistant_results.set(false);
+            });
+        }
+    });
+
     view! {
         <div class="px-4 py-5">
             {move || {
@@ -1968,14 +2025,43 @@ pub fn OnlineTab() -> impl IntoView {
                                 }}
 
                                 // Sync button
-                                <button
-                                    class="w-full py-3 bg-gray-800 hover:bg-gray-700 \
-                                           text-white font-medium rounded-xl transition-colors \
-                                           min-h-[48px] border border-gray-700/50"
-                                    on:click=move |ev| on_sync.with_value(|handler| handler(ev))
-                                >
-                                    "Push Latest Events"
-                                </button>
+                                <div class="space-y-2">
+                                    <button
+                                        class="w-full py-3 bg-gray-800 hover:bg-gray-700 \
+                                               text-white font-medium rounded-xl transition-colors \
+                                               min-h-[48px] border border-gray-700/50"
+                                        on:click=move |ev| on_sync.with_value(|handler| handler(ev))
+                                    >
+                                        "Push Latest Events"
+                                    </button>
+                                    <button
+                                        class="w-full py-3 bg-blue-950 hover:bg-blue-900 \
+                                               text-blue-100 font-medium rounded-xl transition-colors \
+                                               min-h-[48px] border border-blue-800/60 \
+                                               disabled:opacity-50 disabled:cursor-not-allowed"
+                                        disabled=move || is_pulling_assistant_results.get()
+                                        on:click=move |ev| {
+                                            on_pull_assistant_results.with_value(|handler| handler(ev))
+                                        }
+                                    >
+                                        {move || {
+                                            if is_pulling_assistant_results.get() {
+                                                "Pulling Assistant Results…"
+                                            } else {
+                                                "Pull Assistant Results"
+                                            }
+                                        }}
+                                    </button>
+                                    {move || {
+                                        let status = assistant_pull_status.get();
+                                        (!status.is_empty()).then(|| view! {
+                                            <p class="text-sm text-blue-300">{status}</p>
+                                        })
+                                    }}
+                                    <p class="text-xs text-gray-500">
+                                        "Use this after assistants submit scores from their own devices."
+                                    </p>
+                                </div>
 
                                 // Assistant link
                                 <ShareLinkCard

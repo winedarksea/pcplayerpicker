@@ -301,6 +301,10 @@ pub fn FaqPage() -> impl IntoView {
             "Can I self-host this?",
             "Yes. The worker is thin and the core logic lives in Rust, so the sync layer can be replaced by another backend without touching the coach app.",
         ),
+                (
+            "How do I report Bugs and Issues?",
+            "You can report bugs and issues by opening an issue on the GitHub repository: https://github.com/winedarksea/pcplayerpicker/issues",
+        ),
     ];
 
     view! {

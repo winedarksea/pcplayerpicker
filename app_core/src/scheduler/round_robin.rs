@@ -2,6 +2,7 @@ use super::match_candidate::{
     evaluate_candidate_match_score, player_ids_for_indices, visit_unique_team_partitions,
     MatchExposureHistory,
 };
+use super::BenchBalanceTracker;
 /// Round-robin scheduler for cold start (no ranking data yet).
 ///
 /// Uses the circle algorithm to generate balanced pairings where every player
@@ -9,11 +10,9 @@ use super::match_candidate::{
 /// Teams within each match are assigned by searching all unique partitions and
 /// picking the one with the lowest repeat-exposure penalty.
 use super::{ScheduleGenerationRequest, Scheduler};
-use crate::models::{
-    MatchId, MatchStatus, Player, RoundNumber, ScheduledMatch,
-};
+use crate::models::{MatchId, MatchStatus, Player, RoundNumber, ScheduledMatch};
 use rand::seq::SliceRandom;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct RoundRobinScheduler;
 
@@ -39,6 +38,8 @@ impl Scheduler for RoundRobinScheduler {
         let mut all_matches = Vec::new();
         let mut match_id_counter = starting_round.0 * 1000; // unique IDs per round block
         let mut projected_exposure_history = MatchExposureHistory::from_matches(existing_matches);
+        let mut bench_balance_tracker =
+            BenchBalanceTracker::from_history(players, existing_matches, starting_round);
         let ranking_snapshot_by_player_id: HashMap<_, _> = players
             .iter()
             .map(|player| {
@@ -59,9 +60,19 @@ impl Scheduler for RoundRobinScheduler {
 
         for round_offset in 0..num_rounds {
             let round = RoundNumber(starting_round.0 + round_offset);
+            let bench_count = player_ids.len() % players_per_match;
+            let ordered_player_ids: Vec<_> =
+                player_ids.iter().map(|index| players[*index].id).collect();
+            let benched_player_ids =
+                bench_balance_tracker.choose_benched_player_ids(&ordered_player_ids, bench_count);
+            let round_player_order: Vec<usize> = player_ids
+                .iter()
+                .copied()
+                .filter(|index| !benched_player_ids.contains(&players[*index].id))
+                .collect();
             let round_matches = generate_round(
                 players,
-                &player_ids,
+                &round_player_order,
                 team_size,
                 round,
                 &mut match_id_counter,
@@ -75,6 +86,17 @@ impl Scheduler for RoundRobinScheduler {
                     round,
                 );
             }
+            let scheduled_player_ids: HashSet<_> = round_matches
+                .iter()
+                .flat_map(|scheduled_match| {
+                    scheduled_match
+                        .team_a
+                        .iter()
+                        .chain(scheduled_match.team_b.iter())
+                        .copied()
+                })
+                .collect();
+            bench_balance_tracker.record_round(&ordered_player_ids, &scheduled_player_ids);
             all_matches.extend(round_matches);
 
             // Rotate player_ids for next round (circle algorithm)
@@ -275,6 +297,49 @@ mod tests {
             .flat_map(|m| m.team_a.iter().chain(m.team_b.iter()))
             .collect();
         assert_eq!(ids1, ids2);
+    }
+
+    #[test]
+    fn uneven_player_batches_rotate_the_bench() {
+        let scheduler = RoundRobinScheduler;
+        let players = make_players(5);
+        let config = SessionConfig::new(2, 3, Sport::Soccer);
+        let session_id = config.id.clone();
+        let mut rng = SessionRng::new(&session_id);
+
+        let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+            players: &players,
+            rankings: &[],
+            existing_matches: &[],
+            config: &config,
+            rng: &mut rng,
+            starting_round: RoundNumber(1),
+            num_rounds: 3,
+        });
+
+        let mut benched_by_round = Vec::new();
+        for round in 1..=3 {
+            let scheduled_player_ids: std::collections::HashSet<_> = matches
+                .iter()
+                .filter(|scheduled_match| scheduled_match.round == RoundNumber(round))
+                .flat_map(|scheduled_match| {
+                    scheduled_match
+                        .team_a
+                        .iter()
+                        .chain(scheduled_match.team_b.iter())
+                        .copied()
+                })
+                .collect();
+            let benched_player_id = players
+                .iter()
+                .map(|player| player.id)
+                .find(|player_id| !scheduled_player_ids.contains(player_id))
+                .expect("one player should sit out each round");
+            benched_by_round.push(benched_player_id);
+        }
+
+        assert_ne!(benched_by_round[0], benched_by_round[1]);
+        assert_ne!(benched_by_round[1], benched_by_round[2]);
     }
 
     #[test]

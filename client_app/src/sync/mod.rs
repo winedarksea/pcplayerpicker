@@ -160,8 +160,14 @@ struct UploadResponse {
 }
 
 #[derive(Deserialize)]
+struct AppendEventsResponse {
+    cursor: u64,
+}
+
+#[derive(Deserialize)]
 pub struct EventsResponse {
     pub events: Vec<EventEnvelope>,
+    pub cursor: u64,
 }
 
 #[derive(Deserialize)]
@@ -350,12 +356,11 @@ pub async fn push_new_events(
 
     let body = serde_json::json!({ "events": new_events });
     let url = format!("{}/api/sessions/{}/events", api_base(), sync.session_id);
-    fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
-
-    if let Some(last) = new_events.last() {
-        sync.last_pushed_seq = last.session_version;
-        save_sync_state(sync);
-    }
+    let resp_val = fetch_json(&url, "POST", Some(body.to_string()), Some(&sync.coach_key)).await?;
+    let resp: AppendEventsResponse =
+        serde_wasm_bindgen::from_value(resp_val).map_err(|e| e.to_string())?;
+    sync.last_pushed_seq = resp.cursor;
+    save_sync_state(sync);
     Ok(())
 }
 
