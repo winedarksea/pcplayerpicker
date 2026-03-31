@@ -8,6 +8,7 @@
 //! so it survives a refresh.
 
 use crate::meta::use_page_meta;
+use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_only_event_log};
 use crate::read_only_sync::next_read_only_poll_interval_ms;
 use crate::sync::{auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, EventLog};
@@ -25,6 +26,15 @@ const PLAYER_POLL_BASE_MS: u32 = 120_000; // 2 minutes
 /// Stop background polling after this much inactivity. The manual Refresh
 /// button still works; auto-polling resumes on next tab focus or refresh.
 const PLAYER_INACTIVITY_TIMEOUT_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0; // 2 hours
+
+fn format_update_time(ms: f64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
+    let h = date.get_hours();
+    let m = date.get_minutes();
+    let am_pm = if h >= 12 { "PM" } else { "AM" };
+    let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+    format!("{h12}:{m:02} {am_pm}")
+}
 
 fn document_is_hidden() -> bool {
     let Some(window) = web_sys::window() else {
@@ -78,6 +88,7 @@ async fn pull_latest_into_log(
     log: RwSignal<Option<EventLog>>,
     error_msg: RwSignal<String>,
     refresh_in_flight: RwSignal<bool>,
+    last_server_update: RwSignal<Option<f64>>,
     show_errors: bool,
 ) -> Result<bool, String> {
     if refresh_in_flight.get_untracked() {
@@ -113,8 +124,11 @@ async fn pull_latest_into_log(
             .map(|existing| existing.all().to_vec())
             .unwrap_or_default();
         merged.extend(new_events);
-        *slot = Some(EventLog::from_saved(merged));
+        let merged_log = EventLog::from_saved(merged);
+        save_cached_read_only_event_log(session_id, &merged_log);
+        *slot = Some(merged_log);
     });
+    last_server_update.set(Some(js_sys::Date::now()));
     if show_errors {
         error_msg.set(String::new());
     }
@@ -142,6 +156,7 @@ pub fn PlayerPage() -> impl IntoView {
     // or incoming events). Polling pauses after PLAYER_INACTIVITY_TIMEOUT_MS.
     let last_active_ms: RwSignal<f64> = RwSignal::new(js_sys::Date::now());
     let polling_paused = RwSignal::new(false);
+    let last_server_update: RwSignal<Option<f64>> = RwSignal::new(None);
 
     // Player selection
     let selected_player: RwSignal<Option<PlayerId>> = RwSignal::new(None);
@@ -180,12 +195,25 @@ pub fn PlayerPage() -> impl IntoView {
             selected_player.set(Some(pid));
         }
         session_id.set(info.session_id.clone());
-        match pull_latest_into_log(&info.session_id, log, error_msg, refresh_in_flight, true).await
-        {
-            Ok(_) => is_loading.set(false),
-            Err(e) => {
-                error_msg.set(format!("Failed to load schedule: {e}"));
-                is_loading.set(false);
+        if let Some(cached_log) = load_cached_read_only_event_log(&info.session_id) {
+            log.set(Some(cached_log));
+            is_loading.set(false);
+        } else {
+            match pull_latest_into_log(
+                &info.session_id,
+                log,
+                error_msg,
+                refresh_in_flight,
+                last_server_update,
+                true,
+            )
+            .await
+            {
+                Ok(_) => is_loading.set(false),
+                Err(e) => {
+                    error_msg.set(format!("Failed to load schedule: {e}"));
+                    is_loading.set(false);
+                }
             }
         }
     });
@@ -204,8 +232,8 @@ pub fn PlayerPage() -> impl IntoView {
             // Pause (don't call the worker) when the user has been idle for too
             // long. Auto-updates resume once last_active_ms is reset by a
             // manual refresh, player selection, or the tab coming back to focus.
-            let idle = js_sys::Date::now() - last_active_ms.get_untracked()
-                > PLAYER_INACTIVITY_TIMEOUT_MS;
+            let idle =
+                js_sys::Date::now() - last_active_ms.get_untracked() > PLAYER_INACTIVITY_TIMEOUT_MS;
             polling_paused.set(idle);
             if idle {
                 continue;
@@ -225,7 +253,16 @@ pub fn PlayerPage() -> impl IntoView {
             if selected_player.get_untracked().is_none() {
                 continue;
             }
-            match pull_latest_into_log(&sid, log, error_msg, refresh_in_flight, false).await {
+            match pull_latest_into_log(
+                &sid,
+                log,
+                error_msg,
+                refresh_in_flight,
+                last_server_update,
+                false,
+            )
+            .await
+            {
                 Ok(saw_new_events) => {
                     // Incoming events mean the session is active; reset the
                     // inactivity timer so we keep polling while the game is live.
@@ -262,8 +299,15 @@ pub fn PlayerPage() -> impl IntoView {
             }
             poll_interval_ms.set(PLAYER_POLL_BASE_MS);
             leptos::task::spawn_local(async move {
-                let _ =
-                    pull_latest_into_log(&sid, log, error_msg, refresh_in_flight, true).await;
+                let _ = pull_latest_into_log(
+                    &sid,
+                    log,
+                    error_msg,
+                    refresh_in_flight,
+                    last_server_update,
+                    true,
+                )
+                .await;
             });
         });
         let _ = doc.add_event_listener_with_callback(
@@ -298,6 +342,7 @@ pub fn PlayerPage() -> impl IntoView {
                                         log,
                                         error_msg,
                                         refresh_in_flight,
+                                        last_server_update,
                                         true,
                                     )
                                     .await;
@@ -361,6 +406,7 @@ pub fn PlayerPage() -> impl IntoView {
                                             is_loading.set(true);
                                             requires_pin.set(false);
                                             last_active_ms.set(js_sys::Date::now());
+                                            polling_paused.set(false);
                                             poll_interval_ms.set(PLAYER_POLL_BASE_MS);
                                             leptos::task::spawn_local(async move {
                                                 match auth_token(&tok2, &pin).await {
@@ -375,20 +421,30 @@ pub fn PlayerPage() -> impl IntoView {
                                                             selected_player.set(Some(pid));
                                                         }
                                                         session_id.set(info.session_id.clone());
-                                                        match pull_latest_into_log(
-                                                            &info.session_id,
-                                                            log,
-                                                            error_msg,
-                                                            refresh_in_flight,
-                                                            true,
-                                                        )
-                                                        .await {
-                                                            Ok(_) => {
-                                                                is_loading.set(false);
-                                                            }
-                                                            Err(e) => {
-                                                                error_msg.set(format!("Failed to load: {e}"));
-                                                                is_loading.set(false);
+                                                        if let Some(cached_log) =
+                                                            load_cached_read_only_event_log(
+                                                                &info.session_id,
+                                                            )
+                                                        {
+                                                            log.set(Some(cached_log));
+                                                            is_loading.set(false);
+                                                        } else {
+                                                            match pull_latest_into_log(
+                                                                &info.session_id,
+                                                                log,
+                                                                error_msg,
+                                                                refresh_in_flight,
+                                                                last_server_update,
+                                                                true,
+                                                            )
+                                                            .await {
+                                                                Ok(_) => {
+                                                                    is_loading.set(false);
+                                                                }
+                                                                Err(e) => {
+                                                                    error_msg.set(format!("Failed to load: {e}"));
+                                                                    is_loading.set(false);
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -587,6 +643,11 @@ pub fn PlayerPage() -> impl IntoView {
                     }.into_any()
                 }}
             </main>
+            {move || last_server_update.get().map(|ms| view! {
+                <p class="px-4 pb-4 text-center text-xs text-gray-700">
+                    "Last updated: "{format_update_time(ms)}
+                </p>
+            })}
         </div>
     }
 }

@@ -4,6 +4,7 @@
 //! Score submission posts events directly to the worker API.
 
 use crate::meta::use_page_meta;
+use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_only_event_log};
 use crate::read_only_sync::{next_read_only_poll_interval_ms, READ_ONLY_POLL_INTERVAL_MS};
 use crate::sync::{api_base, auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, Event, EventLog};
@@ -12,6 +13,21 @@ use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
+use wasm_bindgen::prelude::Closure;
+use wasm_bindgen::JsCast;
+
+/// Stop assistant auto-polling after prolonged inactivity. Manual refresh is
+/// still immediate, which keeps the worker budget focused on active sessions.
+const ASSISTANT_INACTIVITY_TIMEOUT_MS: f64 = 45.0 * 60.0 * 1000.0;
+
+fn format_update_time(ms: f64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
+    let h = date.get_hours();
+    let m = date.get_minutes();
+    let am_pm = if h >= 12 { "PM" } else { "AM" };
+    let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+    format!("{h12}:{m:02} {am_pm}")
+}
 
 fn document_is_hidden() -> bool {
     let Some(window) = web_sys::window() else {
@@ -35,6 +51,7 @@ async fn pull_latest_into_log(
     log: RwSignal<Option<EventLog>>,
     error_msg: RwSignal<String>,
     refresh_in_flight: RwSignal<bool>,
+    last_server_update: RwSignal<Option<f64>>,
     show_errors: bool,
 ) -> Result<bool, String> {
     if refresh_in_flight.get_untracked() {
@@ -70,8 +87,11 @@ async fn pull_latest_into_log(
             .map(|existing| existing.all().to_vec())
             .unwrap_or_default();
         merged.extend(new_events);
-        *slot = Some(EventLog::from_saved(merged));
+        let merged_log = EventLog::from_saved(merged);
+        save_cached_read_only_event_log(session_id, &merged_log);
+        *slot = Some(merged_log);
     });
+    last_server_update.set(Some(js_sys::Date::now()));
     if show_errors {
         error_msg.set(String::new());
     }
@@ -96,6 +116,9 @@ pub fn AssistantPage() -> impl IntoView {
     let is_loading = RwSignal::new(true);
     let refresh_in_flight = RwSignal::new(false);
     let poll_interval_ms = RwSignal::new(READ_ONLY_POLL_INTERVAL_MS);
+    let last_active_ms: RwSignal<f64> = RwSignal::new(js_sys::Date::now());
+    let polling_paused = RwSignal::new(false);
+    let last_server_update: RwSignal<Option<f64>> = RwSignal::new(None);
 
     // PIN gate signals
     let requires_pin = RwSignal::new(false);
@@ -126,12 +149,25 @@ pub fn AssistantPage() -> impl IntoView {
             return;
         }
         session_id.set(info.session_id.clone());
-        match pull_latest_into_log(&info.session_id, log, error_msg, refresh_in_flight, true).await
-        {
-            Ok(_) => is_loading.set(false),
-            Err(e) => {
-                error_msg.set(format!("Failed to load session: {e}"));
-                is_loading.set(false);
+        if let Some(cached_log) = load_cached_read_only_event_log(&info.session_id) {
+            log.set(Some(cached_log));
+            is_loading.set(false);
+        } else {
+            match pull_latest_into_log(
+                &info.session_id,
+                log,
+                error_msg,
+                refresh_in_flight,
+                last_server_update,
+                true,
+            )
+            .await
+            {
+                Ok(_) => is_loading.set(false),
+                Err(e) => {
+                    error_msg.set(format!("Failed to load session: {e}"));
+                    is_loading.set(false);
+                }
             }
         }
     });
@@ -150,6 +186,12 @@ pub fn AssistantPage() -> impl IntoView {
             if is_loading.get_untracked() || requires_pin.get_untracked() {
                 continue;
             }
+            let idle = js_sys::Date::now() - last_active_ms.get_untracked()
+                > ASSISTANT_INACTIVITY_TIMEOUT_MS;
+            polling_paused.set(idle);
+            if idle {
+                continue;
+            }
             if document_is_hidden() {
                 continue;
             }
@@ -157,14 +199,57 @@ pub fn AssistantPage() -> impl IntoView {
             if sid.is_empty() {
                 continue;
             }
-            match pull_latest_into_log(&sid, log, error_msg, refresh_in_flight, false).await {
+            match pull_latest_into_log(
+                &sid,
+                log,
+                error_msg,
+                refresh_in_flight,
+                last_server_update,
+                false,
+            )
+            .await
+            {
                 Ok(saw_new_events) => {
+                    if saw_new_events {
+                        last_active_ms.set(js_sys::Date::now());
+                    }
                     poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, saw_new_events))
                 }
                 Err(_) => poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, false)),
             }
         }
     });
+
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        let vis_closure = Closure::<dyn Fn()>::new(move || {
+            if stop_polling.get_untracked() || document_is_hidden() {
+                return;
+            }
+            last_active_ms.set(js_sys::Date::now());
+            polling_paused.set(false);
+            let sid = session_id.get_untracked();
+            if sid.is_empty() || is_loading.get_untracked() || requires_pin.get_untracked() {
+                return;
+            }
+            poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
+            leptos::task::spawn_local(async move {
+                let _ = pull_latest_into_log(
+                    &sid,
+                    log,
+                    error_msg,
+                    refresh_in_flight,
+                    last_server_update,
+                    true,
+                )
+                .await;
+            });
+        });
+        let _ = doc.add_event_listener_with_callback(
+            "visibilitychange",
+            vis_closure.as_ref().unchecked_ref::<js_sys::Function>(),
+        );
+        vis_closure.forget();
+    }
 
     view! {
         <div class="app-theme min-h-screen bg-gray-950 text-white">
@@ -181,6 +266,8 @@ pub fn AssistantPage() -> impl IntoView {
                             if sid.is_empty() || is_loading.get_untracked() {
                                 return;
                             }
+                            last_active_ms.set(js_sys::Date::now());
+                            polling_paused.set(false);
                             poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
                             leptos::task::spawn_local(async move {
                                 let _ = pull_latest_into_log(
@@ -188,6 +275,7 @@ pub fn AssistantPage() -> impl IntoView {
                                     log,
                                     error_msg,
                                     refresh_in_flight,
+                                    last_server_update,
                                     true,
                                 )
                                 .await;
@@ -197,6 +285,9 @@ pub fn AssistantPage() -> impl IntoView {
                         "Refresh"
                     </button>
                 </div>
+                {move || polling_paused.get().then(|| view! {
+                    <p class="text-xs text-gray-500">"Auto-updates paused"</p>
+                })}
             </header>
 
             <main class="px-4 py-5">
@@ -246,6 +337,8 @@ pub fn AssistantPage() -> impl IntoView {
                                             let tok2 = tok_val.clone();
                                             is_loading.set(true);
                                             requires_pin.set(false);
+                                            last_active_ms.set(js_sys::Date::now());
+                                            polling_paused.set(false);
                                             poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
                                             leptos::task::spawn_local(async move {
                                                 match auth_token(&tok2, &pin).await {
@@ -256,20 +349,30 @@ pub fn AssistantPage() -> impl IntoView {
                                                             return;
                                                         }
                                                         session_id.set(info.session_id.clone());
-                                                        match pull_latest_into_log(
-                                                            &info.session_id,
-                                                            log,
-                                                            error_msg,
-                                                            refresh_in_flight,
-                                                            true,
-                                                        )
-                                                        .await {
-                                                            Ok(_) => {
-                                                                is_loading.set(false);
-                                                            }
-                                                            Err(e) => {
-                                                                error_msg.set(format!("Failed to load: {e}"));
-                                                                is_loading.set(false);
+                                                        if let Some(cached_log) =
+                                                            load_cached_read_only_event_log(
+                                                                &info.session_id,
+                                                            )
+                                                        {
+                                                            log.set(Some(cached_log));
+                                                            is_loading.set(false);
+                                                        } else {
+                                                            match pull_latest_into_log(
+                                                                &info.session_id,
+                                                                log,
+                                                                error_msg,
+                                                                refresh_in_flight,
+                                                                last_server_update,
+                                                                true,
+                                                            )
+                                                            .await {
+                                                                Ok(_) => {
+                                                                    is_loading.set(false);
+                                                                }
+                                                                Err(e) => {
+                                                                    error_msg.set(format!("Failed to load: {e}"));
+                                                                    is_loading.set(false);
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -400,6 +503,11 @@ pub fn AssistantPage() -> impl IntoView {
                     }.into_any()
                 }}
             </main>
+            {move || last_server_update.get().map(|ms| view! {
+                <p class="px-4 pb-4 text-center text-xs text-gray-700">
+                    "Last updated: "{format_update_time(ms)}
+                </p>
+            })}
         </div>
     }
 }

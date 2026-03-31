@@ -1,5 +1,5 @@
 pub const READ_ONLY_POLL_INTERVAL_MS: u32 = 60_000;
-pub const READ_ONLY_MAX_POLL_INTERVAL_MS: u32 = 300_000;
+pub const READ_ONLY_MAX_POLL_INTERVAL_MS: u32 = 600_000;
 
 /// Quiet read-only views can back off after repeated empty polls without
 /// impacting score-entry latency, because the user can still force a refresh.
@@ -27,7 +27,7 @@ mod tests {
             120_000
         );
         assert_eq!(
-            next_read_only_poll_interval_ms(240_000, false),
+            next_read_only_poll_interval_ms(300_000, false),
             READ_ONLY_MAX_POLL_INTERVAL_MS
         );
         assert_eq!(

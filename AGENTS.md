@@ -17,5 +17,5 @@
 - **Latest Versions** Build for latest versions (for example, for iOS 26, Chromium >= 140.x, Android 16), legacy version support is not important here.
 
 ### Production Targets
-- **Cloudflare Workers** The goal is for the client app (coach) to do the compute, not the cloud server, and be able to do so fully offline, efficiently. Cloudflare workers need to remain small (< 3 MiB) and very fast (< 10 ms).
+- **Cloudflare Workers** The goal is for the client app (coach) to do the compute, not the cloud server, and be able to do so fully offline, efficiently. Cloudflare workers need to remain small (< 3 MiB) and very fast (< 10 ms) and aim to keep api calls minimal.
 - **Portability:** The goal is that this library could be ported off Cloudflare, to a VM and local SQLite, easily.

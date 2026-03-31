@@ -1,5 +1,6 @@
 mod meta;
 mod pages;
+mod read_only_cache;
 mod read_only_sync;
 mod state;
 mod sync;
