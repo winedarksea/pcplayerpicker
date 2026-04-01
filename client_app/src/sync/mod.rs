@@ -27,9 +27,6 @@ pub fn api_base() -> String {
         if origin.contains("localhost:8080") {
             return "http://localhost:8787".to_string();
         }
-        if origin == "https://www.pcplayerpicker.com" {
-            return "https://pcplayerpicker.com".to_string();
-        }
         return origin;
     }
     String::new()
@@ -501,6 +498,10 @@ pub async fn push_session_archive(
     sync: &SyncState,
     archive: &SessionArchive,
 ) -> Result<(), String> {
+    if archive.final_rankings.is_none() {
+        return Ok(());
+    }
+
     let body = serde_json::to_string(archive).map_err(|e| e.to_string())?;
     let url = format!("{}/api/sessions/{}/archive", api_base(), sync.session_id);
     let _: serde_json::Value = fetch_json(&url, "POST", Some(body), Some(&sync.coach_key)).await?;
@@ -552,7 +553,8 @@ mod tests {
 
     #[test]
     fn body_matches_cloudflare_daily_quota_error_for_html_error_pages() {
-        let body = r#"<html><title>Cloudflare Error 1027</title><body>error code: 1027</body></html>"#;
+        let body =
+            r#"<html><title>Cloudflare Error 1027</title><body>error code: 1027</body></html>"#;
         assert!(body_matches_cloudflare_daily_quota_error(body));
     }
 

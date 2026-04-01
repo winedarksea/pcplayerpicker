@@ -5,20 +5,15 @@
 
 use crate::meta::use_page_meta;
 use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_only_event_log};
-use crate::read_only_sync::{next_read_only_poll_interval_ms, READ_ONLY_POLL_INTERVAL_MS};
+use crate::read_only_sync::should_run_debounced_activation_refresh;
 use crate::sync::{api_base, auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, Event, EventLog};
 use app_core::models::{MatchResult, MatchStatus, PlayerMatchScore, Role};
-use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::JsCast;
-
-/// Stop assistant auto-polling after prolonged inactivity. Manual refresh is
-/// still immediate, which keeps the worker budget focused on active sessions.
-const ASSISTANT_INACTIVITY_TIMEOUT_MS: f64 = 45.0 * 60.0 * 1000.0;
 
 fn format_update_time(ms: f64) -> String {
     let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
@@ -115,9 +110,7 @@ pub fn AssistantPage() -> impl IntoView {
     let error_msg: RwSignal<String> = RwSignal::new(String::new());
     let is_loading = RwSignal::new(true);
     let refresh_in_flight = RwSignal::new(false);
-    let poll_interval_ms = RwSignal::new(READ_ONLY_POLL_INTERVAL_MS);
-    let last_active_ms: RwSignal<f64> = RwSignal::new(js_sys::Date::now());
-    let polling_paused = RwSignal::new(false);
+    let last_activation_refresh_ms: RwSignal<Option<f64>> = RwSignal::new(None);
     let last_server_update: RwSignal<Option<f64>> = RwSignal::new(None);
 
     // PIN gate signals
@@ -176,62 +169,24 @@ pub fn AssistantPage() -> impl IntoView {
     on_cleanup(move || {
         stop_polling.set(true);
     });
-    leptos::task::spawn_local(async move {
-        loop {
-            let delay_ms = poll_interval_ms.get_untracked();
-            TimeoutFuture::new(delay_ms).await;
-            if stop_polling.get_untracked() {
-                break;
-            }
-            if is_loading.get_untracked() || requires_pin.get_untracked() {
-                continue;
-            }
-            let idle = js_sys::Date::now() - last_active_ms.get_untracked()
-                > ASSISTANT_INACTIVITY_TIMEOUT_MS;
-            polling_paused.set(idle);
-            if idle {
-                continue;
-            }
-            if document_is_hidden() {
-                continue;
-            }
-            let sid = session_id.get_untracked();
-            if sid.is_empty() {
-                continue;
-            }
-            match pull_latest_into_log(
-                &sid,
-                log,
-                error_msg,
-                refresh_in_flight,
-                last_server_update,
-                false,
-            )
-            .await
-            {
-                Ok(saw_new_events) => {
-                    if saw_new_events {
-                        last_active_ms.set(js_sys::Date::now());
-                    }
-                    poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, saw_new_events))
-                }
-                Err(_) => poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, false)),
-            }
-        }
-    });
 
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let vis_closure = Closure::<dyn Fn()>::new(move || {
             if stop_polling.get_untracked() || document_is_hidden() {
                 return;
             }
-            last_active_ms.set(js_sys::Date::now());
-            polling_paused.set(false);
             let sid = session_id.get_untracked();
             if sid.is_empty() || is_loading.get_untracked() || requires_pin.get_untracked() {
                 return;
             }
-            poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
+            let now_ms = js_sys::Date::now();
+            if !should_run_debounced_activation_refresh(
+                now_ms,
+                last_activation_refresh_ms.get_untracked(),
+            ) {
+                return;
+            }
+            last_activation_refresh_ms.set(Some(now_ms));
             leptos::task::spawn_local(async move {
                 let _ = pull_latest_into_log(
                     &sid,
@@ -266,9 +221,6 @@ pub fn AssistantPage() -> impl IntoView {
                             if sid.is_empty() || is_loading.get_untracked() {
                                 return;
                             }
-                            last_active_ms.set(js_sys::Date::now());
-                            polling_paused.set(false);
-                            poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
                             leptos::task::spawn_local(async move {
                                 let _ = pull_latest_into_log(
                                     &sid,
@@ -285,9 +237,6 @@ pub fn AssistantPage() -> impl IntoView {
                         "Refresh"
                     </button>
                 </div>
-                {move || polling_paused.get().then(|| view! {
-                    <p class="text-xs text-gray-500">"Auto-updates paused"</p>
-                })}
             </header>
 
             <main class="px-4 py-5">
@@ -337,9 +286,6 @@ pub fn AssistantPage() -> impl IntoView {
                                             let tok2 = tok_val.clone();
                                             is_loading.set(true);
                                             requires_pin.set(false);
-                                            last_active_ms.set(js_sys::Date::now());
-                                            polling_paused.set(false);
-                                            poll_interval_ms.set(READ_ONLY_POLL_INTERVAL_MS);
                                             leptos::task::spawn_local(async move {
                                                 match auth_token(&tok2, &pin).await {
                                                     Ok(info) => {

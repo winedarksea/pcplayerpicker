@@ -9,23 +9,14 @@
 
 use crate::meta::use_page_meta;
 use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_only_event_log};
-use crate::read_only_sync::next_read_only_poll_interval_ms;
+use crate::read_only_sync::should_run_debounced_activation_refresh;
 use crate::sync::{auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, EventLog};
 use app_core::models::{MatchStatus, PlayerId, PlayerStatus};
-use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::JsCast;
-
-/// Base polling interval for the player page — slower than the assistant page
-/// because players mainly check their upcoming match, not live score changes.
-const PLAYER_POLL_BASE_MS: u32 = 120_000; // 2 minutes
-
-/// Stop background polling after this much inactivity. The manual Refresh
-/// button still works; auto-polling resumes on next tab focus or refresh.
-const PLAYER_INACTIVITY_TIMEOUT_MS: f64 = 2.0 * 60.0 * 60.0 * 1000.0; // 2 hours
 
 fn format_update_time(ms: f64) -> String {
     let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
@@ -151,11 +142,7 @@ pub fn PlayerPage() -> impl IntoView {
     let is_loading = RwSignal::new(true);
     let session_id = RwSignal::new(String::new());
     let refresh_in_flight = RwSignal::new(false);
-    let poll_interval_ms = RwSignal::new(PLAYER_POLL_BASE_MS);
-    // Tracks the last time the user interacted (selection, refresh, tab focus,
-    // or incoming events). Polling pauses after PLAYER_INACTIVITY_TIMEOUT_MS.
-    let last_active_ms: RwSignal<f64> = RwSignal::new(js_sys::Date::now());
-    let polling_paused = RwSignal::new(false);
+    let last_activation_refresh_ms: RwSignal<Option<f64>> = RwSignal::new(None);
     let last_server_update: RwSignal<Option<f64>> = RwSignal::new(None);
 
     // Player selection
@@ -222,63 +209,8 @@ pub fn PlayerPage() -> impl IntoView {
     on_cleanup(move || {
         stop_polling.set(true);
     });
-    leptos::task::spawn_local(async move {
-        loop {
-            let delay_ms = poll_interval_ms.get_untracked();
-            TimeoutFuture::new(delay_ms).await;
-            if stop_polling.get_untracked() {
-                break;
-            }
-            // Pause (don't call the worker) when the user has been idle for too
-            // long. Auto-updates resume once last_active_ms is reset by a
-            // manual refresh, player selection, or the tab coming back to focus.
-            let idle =
-                js_sys::Date::now() - last_active_ms.get_untracked() > PLAYER_INACTIVITY_TIMEOUT_MS;
-            polling_paused.set(idle);
-            if idle {
-                continue;
-            }
-            if is_loading.get_untracked() || requires_pin.get_untracked() {
-                continue;
-            }
-            if document_is_hidden() {
-                continue;
-            }
-            let sid = session_id.get_untracked();
-            if sid.is_empty() {
-                continue;
-            }
-            // Don't poll until the player has selected their name — before
-            // selection there is nothing to display and no reason to fetch.
-            if selected_player.get_untracked().is_none() {
-                continue;
-            }
-            match pull_latest_into_log(
-                &sid,
-                log,
-                error_msg,
-                refresh_in_flight,
-                last_server_update,
-                false,
-            )
-            .await
-            {
-                Ok(saw_new_events) => {
-                    // Incoming events mean the session is active; reset the
-                    // inactivity timer so we keep polling while the game is live.
-                    if saw_new_events {
-                        last_active_ms.set(js_sys::Date::now());
-                    }
-                    poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, saw_new_events))
-                }
-                Err(_) => poll_interval_ms.set(next_read_only_poll_interval_ms(delay_ms, false)),
-            }
-        }
-    });
-
-    // Refresh immediately when the tab comes back to the foreground, and reset
-    // the inactivity timer so auto-polling resumes after a period of idleness.
-    //
+    // Refresh when the tab clearly becomes visible again, but debounce that
+    // path so quick app switches do not generate back-to-back worker calls.
     // `Closure::forget()` intentionally leaks the Rust closure so the JS
     // function stays alive for the lifetime of the page. The `stop_polling`
     // guard makes it a no-op after the component unmounts, so this is safe.
@@ -288,8 +220,6 @@ pub fn PlayerPage() -> impl IntoView {
             if stop_polling.get_untracked() || document_is_hidden() {
                 return;
             }
-            last_active_ms.set(js_sys::Date::now());
-            polling_paused.set(false);
             let sid = session_id.get_untracked();
             if sid.is_empty()
                 || is_loading.get_untracked()
@@ -297,7 +227,14 @@ pub fn PlayerPage() -> impl IntoView {
             {
                 return;
             }
-            poll_interval_ms.set(PLAYER_POLL_BASE_MS);
+            let now_ms = js_sys::Date::now();
+            if !should_run_debounced_activation_refresh(
+                now_ms,
+                last_activation_refresh_ms.get_untracked(),
+            ) {
+                return;
+            }
+            last_activation_refresh_ms.set(Some(now_ms));
             leptos::task::spawn_local(async move {
                 let _ = pull_latest_into_log(
                     &sid,
@@ -333,9 +270,6 @@ pub fn PlayerPage() -> impl IntoView {
                                 if sid.is_empty() || is_loading.get_untracked() {
                                     return;
                                 }
-                                last_active_ms.set(js_sys::Date::now());
-                                polling_paused.set(false);
-                                poll_interval_ms.set(PLAYER_POLL_BASE_MS);
                                 leptos::task::spawn_local(async move {
                                     let _ = pull_latest_into_log(
                                         &sid,
@@ -351,9 +285,6 @@ pub fn PlayerPage() -> impl IntoView {
                         >
                             "Refresh"
                         </button>
-                        {move || polling_paused.get().then(|| view! {
-                            <p class="text-xs text-gray-500">"Auto-updates paused"</p>
-                        })}
                     </div>
                 </div>
             </header>
@@ -405,9 +336,6 @@ pub fn PlayerPage() -> impl IntoView {
                                             let tok2 = tok_val.clone();
                                             is_loading.set(true);
                                             requires_pin.set(false);
-                                            last_active_ms.set(js_sys::Date::now());
-                                            polling_paused.set(false);
-                                            poll_interval_ms.set(PLAYER_POLL_BASE_MS);
                                             leptos::task::spawn_local(async move {
                                                 match auth_token(&tok2, &pin).await {
                                                     Ok(info) => {
@@ -520,8 +448,6 @@ pub fn PlayerPage() -> impl IntoView {
                                                 on:click=move |_| {
                                                     write_player_selection(&tok2, pid);
                                                     selected_player.set(Some(pid));
-                                                    last_active_ms.set(js_sys::Date::now());
-                                                    polling_paused.set(false);
                                                 }
                                             >
                                                 {name}

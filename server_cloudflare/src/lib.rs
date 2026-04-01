@@ -29,6 +29,9 @@ const MAX_EVENTS_UPLOAD: usize = 1_000;
 /// Maximum events accepted in a single incremental append.
 const MAX_EVENTS_APPEND: usize = 100;
 
+/// Keep D1 batches bounded so large uploads do not build oversized JS arrays.
+const MAX_D1_BATCH_STATEMENTS: usize = 100;
+
 /// Raw event log is deleted after this many days. The coach client writes an
 /// archived summary before this window expires, so final results are preserved.
 const ARCHIVE_AFTER_DAYS: f64 = 90.0;
@@ -90,12 +93,6 @@ struct AppendRequest {
 }
 
 #[derive(Serialize)]
-struct EventsResponse {
-    events: Vec<EventEnvelope>,
-    cursor: u32,
-}
-
-#[derive(Serialize)]
 struct ShareResponse {
     assistant_token: String,
     player_token: String,
@@ -114,6 +111,12 @@ struct TokenInfo {
 struct StoredEventRow {
     seq: u32,
     payload: String,
+}
+
+#[derive(Deserialize)]
+struct ReservedSequenceRangeRow {
+    start_seq: u32,
+    cursor: u32,
 }
 
 // ── Allowed CORS origins ──────────────────────────────────────────────────────
@@ -159,6 +162,13 @@ fn ok_json<T: Serialize>(val: &T, origin: &str) -> Result<Response> {
     Ok(with_cors(Response::from_json(val)?, origin))
 }
 
+fn ok_json_text(body: String, origin: &str) -> Result<Response> {
+    let mut resp = Response::from_body(ResponseBody::Body(body.into_bytes()))?;
+    let h = resp.headers_mut();
+    let _ = h.set("Content-Type", "application/json");
+    Ok(with_cors(resp, origin))
+}
+
 fn err_json(msg: &str, status: u16, origin: &str) -> Result<Response> {
     Ok(with_cors(Response::error(msg, status)?, origin))
 }
@@ -186,6 +196,49 @@ fn internal_api_error_response(
         500,
         origin,
     )
+}
+
+fn build_events_response_json_body(rows: &[StoredEventRow], fallback_cursor: u32) -> String {
+    let cursor = rows.last().map(|row| row.seq).unwrap_or(fallback_cursor);
+    let payload_capacity = rows.iter().map(|row| row.payload.len() + 1).sum::<usize>();
+    let mut body = String::with_capacity(payload_capacity + 32);
+    body.push_str("{\"events\":[");
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            body.push(',');
+        }
+        body.push_str(&row.payload);
+    }
+    body.push_str("],\"cursor\":");
+    body.push_str(&cursor.to_string());
+    body.push('}');
+    body
+}
+
+fn build_event_insert_statement(
+    db: &D1Database,
+    session_id: &str,
+    seq: u32,
+    payload: &str,
+    insert_or_ignore: bool,
+) -> Result<D1PreparedStatement> {
+    let query = if insert_or_ignore {
+        "INSERT OR IGNORE INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)"
+    } else {
+        "INSERT INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)"
+    };
+    db.prepare(query)
+        .bind(&[session_id.into(), d1_u32(seq), payload.into()])
+}
+
+async fn run_d1_statement_batches(
+    db: &D1Database,
+    statements: Vec<D1PreparedStatement>,
+) -> Result<()> {
+    for batch in statements.chunks(MAX_D1_BATCH_STATEMENTS) {
+        db.batch(batch.to_vec()).await?;
+    }
+    Ok(())
 }
 
 async fn parse_json_req<T: serde::de::DeserializeOwned>(
@@ -322,38 +375,83 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
 
         // Keep step-local diagnostics so worker failures identify whether the
         // D1 setup, event serialization, insert, or token generation failed.
+        let created_at = js_sys::Date::now();
         let coach_key = gen_token();
         let coach_key_hash = simple_hash(&coach_key, &body.session_id);
+        let cursor = body
+            .events
+            .iter()
+            .map(|event| event.session_version as u32)
+            .max()
+            .unwrap_or(0);
+        let next_seq = cursor.saturating_add(1);
 
-        db.prepare(
-            "INSERT OR IGNORE INTO sessions (id, created_at, coach_key_hash) VALUES (?1, ?2, ?3)",
-        )
-        .bind(&[
-            body.session_id.as_str().into(),
-            d1_number(js_sys::Date::now()),
-            coach_key_hash.as_str().into(),
-        ])?
-        .run()
-        .await?;
-
-        let mut cursor = 0u32;
-        for env_event in &body.events {
-            let payload =
-                serde_json::to_string(env_event).map_err(|e| Error::from(e.to_string()))?;
-            db.prepare(
-                "INSERT OR IGNORE INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)",
+        let session_insert_result = db
+            .prepare(
+                "INSERT OR IGNORE INTO sessions (id, created_at, coach_key_hash, next_seq) VALUES (?1, ?2, ?3, ?4)",
             )
             .bind(&[
                 body.session_id.as_str().into(),
-                d1_u64(env_event.session_version),
-                payload.as_str().into(),
+                d1_number(created_at),
+                coach_key_hash.as_str().into(),
+                d1_u32(next_seq),
             ])?
             .run()
             .await?;
-            cursor = cursor.max(env_event.session_version as u32);
+
+        if session_insert_result
+            .meta()?
+            .and_then(|meta| meta.changes)
+            .unwrap_or(0)
+            == 0
+        {
+            return Err(Error::from(format!(
+                "SESSION_ALREADY_EXISTS:{}",
+                body.session_id
+            )));
         }
 
-        let (assistant_token, player_token) = get_or_create_tokens(&body.session_id, &db).await?;
+        let mut event_insert_statements = Vec::with_capacity(body.events.len());
+        for env_event in &body.events {
+            let payload =
+                serde_json::to_string(env_event).map_err(|e| Error::from(e.to_string()))?;
+            event_insert_statements.push(build_event_insert_statement(
+                &db,
+                &body.session_id,
+                env_event.session_version as u32,
+                &payload,
+                true,
+            )?);
+        }
+        run_d1_statement_batches(&db, event_insert_statements).await?;
+
+        let assistant_token = gen_token();
+        let player_token = gen_token();
+        run_d1_statement_batches(
+            &db,
+            vec![
+                db.prepare(
+                    "INSERT INTO share_tokens (token, session_id, role, created_at) \
+                     VALUES (?1, ?2, 'assistant', ?3)",
+                )
+                .bind(&[
+                    assistant_token.as_str().into(),
+                    body.session_id.as_str().into(),
+                    d1_number(created_at),
+                ])?,
+                db.prepare(
+                    "INSERT INTO share_tokens (token, session_id, role, created_at) \
+                     VALUES (?1, ?2, 'player', ?3)",
+                )
+                .bind(&[
+                    player_token.as_str().into(),
+                    body.session_id.as_str().into(),
+                    d1_number(created_at),
+                ])?,
+            ],
+        )
+        .await?;
+
         Ok::<(u32, String, String, String), Error>((
             cursor,
             assistant_token,
@@ -366,6 +464,13 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
     let (cursor, assistant_token, player_token, coach_key) = match upload_result {
         Ok(result) => result,
         Err(error) => {
+            if error.to_string().starts_with("SESSION_ALREADY_EXISTS:") {
+                return err_json(
+                    "Session already exists online. Reload the existing sync state on this device, or recover on a new device with the coach PIN.",
+                    409,
+                    origin,
+                );
+            }
             return internal_api_error_response(
                 origin,
                 "POST /api/sessions",
@@ -374,7 +479,7 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
                     "session_id": body.session_id,
                     "event_count": body.events.len(),
                 }),
-            )
+            );
         }
     };
 
@@ -417,18 +522,8 @@ async fn handle_get_events(
         .all()
         .await?;
 
-    // Deserialize event envelopes from stored JSON
     let raw: Vec<StoredEventRow> = rows.results()?;
-    let mut events: Vec<EventEnvelope> = Vec::with_capacity(raw.len());
-    let mut cursor = since as u32;
-    for row in raw {
-        if let Ok(ev) = serde_json::from_str::<EventEnvelope>(&row.payload) {
-            cursor = cursor.max(row.seq);
-            events.push(ev);
-        }
-    }
-
-    ok_json(&EventsResponse { events, cursor }, origin)
+    ok_json_text(build_events_response_json_body(&raw, since as u32), origin)
 }
 
 /// POST /api/sessions/:id/events
@@ -503,37 +598,38 @@ async fn handle_append_events(
         }
     }
 
-    let row = db
-        .prepare("SELECT COALESCE(MAX(seq), -1) AS max_seq FROM events WHERE session_id = ?1")
-        .bind(&[session_id.into()])?
-        .first::<serde_json::Value>(None)
+    let reserved_range = db
+        .prepare(
+            "UPDATE sessions \
+             SET next_seq = next_seq + ?1 \
+             WHERE id = ?2 \
+             RETURNING next_seq - ?1 AS start_seq, next_seq - 1 AS cursor",
+        )
+        .bind(&[d1_u32(body.events.len() as u32), session_id.into()])?
+        .first::<ReservedSequenceRangeRow>(None)
         .await?;
-    let mut next_seq = row
-        .as_ref()
-        .and_then(|r| r.get("max_seq"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(-1)
-        + 1;
-    let mut cursor = next_seq.saturating_sub(1) as u32;
+    let reserved_range = match reserved_range {
+        Some(row) => row,
+        None => return err_json("Session not found", 404, origin),
+    };
 
-    for ev in body.events {
+    let mut event_insert_statements = Vec::with_capacity(body.events.len());
+    for (offset, ev) in body.events.into_iter().enumerate() {
+        let seq = reserved_range.start_seq + offset as u32;
         let mut stored = ev;
-        stored.id = app_core::models::EventId(next_seq as u64);
-        stored.session_version = next_seq as u64;
+        stored.id = app_core::models::EventId(seq as u64);
+        stored.session_version = seq as u64;
         let payload = serde_json::to_string(&stored).map_err(|e| Error::from(e.to_string()))?;
-        db.prepare("INSERT INTO events (session_id, seq, payload) VALUES (?1, ?2, ?3)")
-            .bind(&[
-                session_id.into(),
-                d1_u32(next_seq as u32),
-                payload.as_str().into(),
-            ])?
-            .run()
-            .await?;
-        cursor = next_seq as u32;
-        next_seq += 1;
+        event_insert_statements.push(build_event_insert_statement(
+            &db, session_id, seq, &payload, false,
+        )?);
     }
+    run_d1_statement_batches(&db, event_insert_statements).await?;
 
-    ok_json(&serde_json::json!({ "ok": true, "cursor": cursor }), origin)
+    ok_json(
+        &serde_json::json!({ "ok": true, "cursor": reserved_range.cursor }),
+        origin,
+    )
 }
 
 /// POST /api/sessions/:id/pin
@@ -640,15 +736,7 @@ async fn handle_recover(
         .await?;
 
     let raw: Vec<StoredEventRow> = rows.results()?;
-    let mut events: Vec<EventEnvelope> = Vec::with_capacity(raw.len());
-    let mut cursor = 0u32;
-    for row in raw {
-        if let Ok(ev) = serde_json::from_str::<EventEnvelope>(&row.payload) {
-            cursor = cursor.max(row.seq);
-            events.push(ev);
-        }
-    }
-    ok_json(&EventsResponse { events, cursor }, origin)
+    ok_json_text(build_events_response_json_body(&raw, 0), origin)
 }
 
 /// Deterministic salted SHA-256 hash for PINs and coach keys.
@@ -1258,4 +1346,36 @@ async fn get_or_create_tokens(session_id: &str, db: &D1Database) -> Result<(Stri
     };
 
     Ok((assistant_token, player_token))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_events_response_json_body, StoredEventRow};
+
+    #[test]
+    fn build_events_response_json_body_keeps_stored_payloads_verbatim() {
+        let rows = vec![
+            StoredEventRow {
+                seq: 3,
+                payload: "{\"session_version\":3}".to_string(),
+            },
+            StoredEventRow {
+                seq: 4,
+                payload: "{\"session_version\":4}".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            build_events_response_json_body(&rows, 1),
+            "{\"events\":[{\"session_version\":3},{\"session_version\":4}],\"cursor\":4}"
+        );
+    }
+
+    #[test]
+    fn build_events_response_json_body_uses_fallback_cursor_for_empty_pages() {
+        assert_eq!(
+            build_events_response_json_body(&[], 12),
+            "{\"events\":[],\"cursor\":12}"
+        );
+    }
 }

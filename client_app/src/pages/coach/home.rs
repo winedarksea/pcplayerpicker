@@ -22,15 +22,17 @@ fn canonicalize_recovery_session_id(raw_session_id: &str) -> Option<String> {
         return None;
     }
 
-    Some(format!(
-        "{}-{}-{}-{}-{}",
-        &compact_hex[0..8],
-        &compact_hex[8..12],
-        &compact_hex[12..16],
-        &compact_hex[16..20],
-        &compact_hex[20..32],
+    Some(
+        format!(
+            "{}-{}-{}-{}-{}",
+            &compact_hex[0..8],
+            &compact_hex[8..12],
+            &compact_hex[12..16],
+            &compact_hex[16..20],
+            &compact_hex[20..32],
+        )
+        .to_ascii_lowercase(),
     )
-    .to_ascii_lowercase())
 }
 
 /// Ask the browser to treat storage as persistent (not subject to eviction).
@@ -145,9 +147,10 @@ pub fn CoachHome() -> impl IntoView {
             let raw_session_id = recover_id.get_untracked();
             let pin = recover_pin.get_untracked().trim().to_string();
             let Some(session_id) = canonicalize_recovery_session_id(&raw_session_id) else {
-                recover_status
-                    .set("Enter the full session ID shown online, including all UUID digits."
-                        .to_string());
+                recover_status.set(
+                    "Enter the full session ID shown online, including all UUID digits."
+                        .to_string(),
+                );
                 return;
             };
             recover_id.set(session_id.clone());
