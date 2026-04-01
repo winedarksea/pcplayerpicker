@@ -132,6 +132,7 @@ struct ReservedSequenceRangeRow {
 struct AdminOverviewResponse {
     generated_at: f64,
     generated_at_iso: String,
+    snapshot_available: bool,
     totals: AdminOverviewTotals,
     sessions: Vec<AdminSessionOverviewRow>,
 }
@@ -569,6 +570,7 @@ async fn build_admin_overview(env: &Env) -> Result<AdminOverviewResponse> {
     Ok(AdminOverviewResponse {
         generated_at: now,
         generated_at_iso: format_timestamp_ms_as_iso(now),
+        snapshot_available: true,
         totals: AdminOverviewTotals {
             total_sessions,
             live_sessions,
@@ -618,26 +620,19 @@ async fn load_admin_overview_snapshot(env: &Env) -> Result<AdminOverviewResponse
         }
     }
 
-    // Backfill only when the snapshot is missing or corrupted. Normal admin
-    // requests read the precomputed row and do not run the overview queries.
-    let overview = build_admin_overview(env).await?;
-    let payload =
-        serde_json::to_string(&overview).map_err(|error| Error::from(error.to_string()))?;
-    db.prepare(
-        "INSERT INTO admin_snapshots (snapshot_key, updated_at, payload) \
-         VALUES (?1, ?2, ?3) \
-         ON CONFLICT(snapshot_key) DO UPDATE SET \
-             updated_at = excluded.updated_at, \
-             payload = excluded.payload",
-    )
-    .bind(&[
-        ADMIN_SNAPSHOT_PRIMARY_KEY.into(),
-        d1_number(js_sys::Date::now()),
-        payload.as_str().into(),
-    ])?
-    .run()
-    .await?;
-    Ok(overview)
+    Ok(AdminOverviewResponse {
+        generated_at: 0.0,
+        generated_at_iso: "not-yet-generated".to_string(),
+        snapshot_available: false,
+        totals: AdminOverviewTotals {
+            total_sessions: 0,
+            live_sessions: 0,
+            archived_sessions: 0,
+            sessions_last_24h: 0,
+            sessions_last_7d: 0,
+        },
+        sessions: Vec::new(),
+    })
 }
 
 fn render_admin_html_page(overview: &AdminOverviewResponse) -> String {
@@ -712,7 +707,7 @@ fn render_admin_html_page(overview: &AdminOverviewResponse) -> String {
          <body>\
            <main>\
              <h1>Online Session Overview</h1>\
-             <p>Generated {generated_at}. This hidden page is served directly by the Worker and is not linked from the public app.</p>\
+             <p>{summary_text}</p>\
              <section class=\"stats\">\
                <div class=\"card\"><span class=\"label\">Total Sessions</span><span class=\"value\">{total_sessions}</span></div>\
                <div class=\"card\"><span class=\"label\">Live Sessions</span><span class=\"value\">{live_sessions}</span></div>\
@@ -738,7 +733,14 @@ fn render_admin_html_page(overview: &AdminOverviewResponse) -> String {
            </main>\
          </body>\
          </html>",
-        generated_at = html_escape(&overview.generated_at_iso),
+        summary_text = if overview.snapshot_available {
+            html_escape(&format!(
+                "Generated {}. This hidden page is served directly by the Worker and is not linked from the public app.",
+                overview.generated_at_iso
+            ))
+        } else {
+            "Snapshot unavailable. Wait for the scheduled refresh job to generate the admin overview.".to_string()
+        },
         total_sessions = overview.totals.total_sessions,
         live_sessions = overview.totals.live_sessions,
         archived_sessions = overview.totals.archived_sessions,
@@ -983,7 +985,6 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
         }
     };
 
-    let _ = refresh_admin_overview_snapshot(env).await;
     ok_json(
         &UploadResponse {
             ok: true,
@@ -1591,7 +1592,6 @@ async fn handle_archive_session(
     .run()
     .await?;
 
-    let _ = refresh_admin_overview_snapshot(env).await;
     ok_json(&serde_json::json!({ "ok": true }), origin)
 }
 
