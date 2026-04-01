@@ -232,7 +232,7 @@ fn validate_team_size(
 mod tests {
     use super::*;
     use crate::events::Event;
-    use crate::models::{MatchResult, Player, Role, RoundNumber, SessionConfig, Sport};
+    use crate::models::{MatchResult, Role, RoundNumber, SessionConfig, Sport};
     use crate::session::SessionManager;
     use std::collections::HashMap;
 

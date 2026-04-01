@@ -1,5 +1,6 @@
 pub mod dashboard;
 pub mod home;
+mod match_player_sheet;
 mod schedule_export;
 pub mod setup;
 

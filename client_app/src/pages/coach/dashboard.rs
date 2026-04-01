@@ -2,6 +2,7 @@ use super::schedule_export::{
     build_round_schedule_share_snapshot, copy_text_to_clipboard, format_round_schedule_share_text,
     share_round_schedule_image, RoundScheduleImageShareOutcome,
 };
+use super::match_player_sheet::RoundPlayerChangeSheet;
 use crate::coach_sync::pull_assistant_score_events;
 use crate::meta::use_page_meta;
 use crate::state::{load_session, save_session, AppContext};
@@ -180,11 +181,7 @@ pub fn DashboardPage() -> impl IntoView {
 pub fn MatchesTab() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext missing");
 
-    // Signal to control which match has the swap UI open: Some(match_id)
-    let swap_open: RwSignal<Option<MatchId>> = RwSignal::new(None);
-    // Per-match swap selections: (match_id, old_player_id, new_player_id)
-    let swap_old: RwSignal<Option<PlayerId>> = RwSignal::new(None);
-    let swap_new: RwSignal<Option<PlayerId>> = RwSignal::new(None);
+    let player_change_sheet_match_id: RwSignal<Option<MatchId>> = RwSignal::new(None);
     let round_share_status_message: RwSignal<String> = RwSignal::new(String::new());
     let round_share_image_is_busy = RwSignal::new(false);
 
@@ -305,36 +302,6 @@ pub fn MatchesTab() -> impl IntoView {
         }
     };
 
-    let on_swap = {
-        let ctx = ctx.clone();
-        move |mid: MatchId| {
-            let old_pid = match swap_old.get_untracked() {
-                Some(p) => p,
-                None => return,
-            };
-            let new_pid = match swap_new.get_untracked() {
-                Some(p) => p,
-                None => return,
-            };
-            if old_pid == new_pid {
-                return;
-            }
-            ctx.session.update(|opt| {
-                if let Some(manager) = opt {
-                    manager.swap_player(mid, old_pid, new_pid);
-                }
-            });
-            ctx.session.with(|s| {
-                if let Some(m) = s {
-                    save_session(m);
-                }
-            });
-            swap_open.set(None);
-            swap_old.set(None);
-            swap_new.set(None);
-        }
-    };
-
     let on_copy_round_text = {
         move |_| {
             let Some(round_share_snapshot) = current_round_share_snapshot() else {
@@ -421,11 +388,6 @@ pub fn MatchesTab() -> impl IntoView {
                     }.into_any()
                 } else {
                     let player_map = manager.state.players.clone();
-                    let all_players: Vec<_> = manager.state.players.values()
-                        .filter(|p| p.status == app_core::models::PlayerStatus::Active)
-                        .map(|p| (p.id, p.name.clone()))
-                        .collect();
-
                     view! {
                         <div>
                             <div class="flex items-center justify-between mb-4">
@@ -490,13 +452,10 @@ pub fn MatchesTab() -> impl IntoView {
                                     let team_b_names: Vec<_> = m.team_b.iter()
                                         .filter_map(|id| player_map.get(id).map(|p| p.name.clone()))
                                         .collect();
-                                    let all_match_ids: Vec<PlayerId> =
-                                        m.team_a.iter().chain(m.team_b.iter()).cloned().collect();
                                     let field = m.field;
                                     let status = m.status.clone();
                                     let is_completed = status == MatchStatus::Completed;
 
-                                    let all_players_for_swap = all_players.clone();
                                     view! {
                                         <div class="bg-gray-900 border border-gray-700/50 rounded-xl p-4">
                                             <div class="flex items-center justify-between mb-3">
@@ -530,41 +489,19 @@ pub fn MatchesTab() -> impl IntoView {
                                             // Action buttons (only if not completed)
                                             {(!is_completed).then(|| {
                                                 let on_void2 = on_void;
-                                                let on_swap2 = on_swap;
-                                                let all_players2 = all_players_for_swap.clone();
-                                                let match_ids2 = all_match_ids.clone();
                                                 view! {
                                                     <div>
                                                         <div class="flex gap-2 border-t border-gray-700/30 pt-3">
-                                                            // Swap player toggle
                                                             <button
-                                                                class=move || {
-                                                                    let open = swap_open.get() == Some(mid);
-                                                                    if open {
-                                                                        "flex-1 py-2 text-xs font-medium rounded-lg \
-                                                                         bg-gray-700 text-white transition-colors"
-                                                                    } else {
-                                                                        "flex-1 py-2 text-xs font-medium rounded-lg \
-                                                                         bg-gray-800 text-gray-300 hover:bg-gray-700 \
-                                                                         transition-colors"
-                                                                    }
-                                                                }
+                                                                class="flex-1 py-2 text-xs font-medium rounded-lg \
+                                                                       bg-gray-800 text-gray-300 hover:bg-gray-700 \
+                                                                       transition-colors"
                                                                 on:click=move |_| {
-                                                                    let already = swap_open.get_untracked() == Some(mid);
-                                                                    if already {
-                                                                        swap_open.set(None);
-                                                                        swap_old.set(None);
-                                                                        swap_new.set(None);
-                                                                    } else {
-                                                                        swap_open.set(Some(mid));
-                                                                        swap_old.set(None);
-                                                                        swap_new.set(None);
-                                                                    }
+                                                                    player_change_sheet_match_id.set(Some(mid));
                                                                 }
                                                             >
-                                                                "Swap Player"
+                                                                "Change Players"
                                                             </button>
-                                                            // Void match
                                                             <button
                                                                 class="px-3 py-2 text-xs font-medium rounded-lg \
                                                                        bg-gray-800 text-red-400 hover:bg-red-950/40 \
@@ -574,85 +511,6 @@ pub fn MatchesTab() -> impl IntoView {
                                                                 "Void"
                                                             </button>
                                                         </div>
-
-                                                        // Inline swap form
-                                                        {move || (swap_open.get() == Some(mid)).then(|| {
-                                                            let match_ids3 = match_ids2.clone();
-                                                            let all_players3 = all_players2.clone();
-                                                            let on_swap3 = on_swap2;
-                                                            view! {
-                                                                <div class="mt-3 p-3 bg-gray-800 rounded-lg space-y-2">
-                                                                    <p class="text-xs text-gray-400 mb-2">
-                                                                        "Replace a player in this match:"
-                                                                    </p>
-                                                                    // Remove (old player)
-                                                                    <div>
-                                                                        <label class="text-xs text-gray-500">"Remove"</label>
-                                                                        <select
-                                                                            class="mt-1 w-full bg-gray-900 border border-gray-600 \
-                                                                                   rounded-lg px-3 py-2 text-white text-sm \
-                                                                                   min-h-[40px]"
-                                                                            on:change=move |ev| {
-                                                                                let v = event_target_value(&ev);
-                                                                                if v.is_empty() {
-                                                                                    swap_old.set(None);
-                                                                                } else if let Ok(n) = v.parse::<u32>() {
-                                                                                    swap_old.set(Some(PlayerId(n)));
-                                                                                }
-                                                                            }
-                                                                        >
-                                                                            <option value="">"— pick player —"</option>
-                                                                            {match_ids3.iter().map(|&pid| {
-                                                                                let name = all_players3.iter()
-                                                                                    .find(|(id,_)| *id == pid)
-                                                                                    .map(|(_,n)| n.clone())
-                                                                                    .unwrap_or_else(|| format!("#{}", pid.0));
-                                                                                let val = pid.0.to_string();
-                                                                                view! {
-                                                                                    <option value=val>{name}</option>
-                                                                                }
-                                                                            }).collect_view()}
-                                                                        </select>
-                                                                    </div>
-                                                                    // Add (new player)
-                                                                    <div>
-                                                                        <label class="text-xs text-gray-500">"Substitute"</label>
-                                                                        <select
-                                                                            class="mt-1 w-full bg-gray-900 border border-gray-600 \
-                                                                                   rounded-lg px-3 py-2 text-white text-sm \
-                                                                                   min-h-[40px]"
-                                                                            on:change=move |ev| {
-                                                                                let v = event_target_value(&ev);
-                                                                                if v.is_empty() {
-                                                                                    swap_new.set(None);
-                                                                                } else if let Ok(n) = v.parse::<u32>() {
-                                                                                    swap_new.set(Some(PlayerId(n)));
-                                                                                }
-                                                                            }
-                                                                        >
-                                                                            <option value="">"— pick player —"</option>
-                                                                            {all_players3.iter()
-                                                                                .filter(|(pid,_)| !match_ids2.contains(pid))
-                                                                                .map(|(pid, name)| {
-                                                                                    let val = pid.0.to_string();
-                                                                                    let name = name.clone();
-                                                                                    view! {
-                                                                                        <option value=val>{name}</option>
-                                                                                    }
-                                                                                }).collect_view()}
-                                                                        </select>
-                                                                    </div>
-                                                                    <button
-                                                                        class="w-full py-2 mt-1 bg-blue-600 hover:bg-blue-500 \
-                                                                               text-white text-sm font-semibold rounded-lg \
-                                                                               transition-colors disabled:opacity-40"
-                                                                        on:click=move |_| on_swap3(mid)
-                                                                    >
-                                                                        "Confirm Swap"
-                                                                    </button>
-                                                                </div>
-                                                            }
-                                                        })}
                                                     </div>
                                                 }
                                             })}
@@ -660,6 +518,7 @@ pub fn MatchesTab() -> impl IntoView {
                                     }
                                 }).collect_view()}
                             </div>
+                            <RoundPlayerChangeSheet open_match_id=player_change_sheet_match_id/>
                         </div>
                     }.into_any()
                 }
