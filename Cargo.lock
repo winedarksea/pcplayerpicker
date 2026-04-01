@@ -1715,6 +1715,7 @@ name = "server_cloudflare"
 version = "0.1.0"
 dependencies = [
  "app_core",
+ "base64",
  "console_error_panic_hook",
  "getrandom 0.2.17",
  "serde",

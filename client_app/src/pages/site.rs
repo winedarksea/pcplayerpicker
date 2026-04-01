@@ -266,6 +266,10 @@ pub fn FaqPage() -> impl IntoView {
             "Yes. Session setup, local persistence, scheduling, results entry, and ranking analysis are designed to work on the coach device without a network connection.",
         ),
         (
+            "What does 'going online' mean here?",
+            "Going online means registering the session with the host server by clicking the 'Go Online' button. This enables features like recovery PINs and sharing session data by URL with Assistants and Players. Without clicking the go online button, the session data stays local to the coach device and won't be accessible from other devices or browsers. Going online is optional, other means of sharing a session are enabled, such as exporting csvs and copy-paste match schedules ready to share in group chat apps",
+        ),
+        (
             "What data should assistants enter?",
             "The primary input is goals scored per player per match. That is the main signal feeding the ranking engine. Did-not-play stays distinct from a real zero-goal game.",
         ),
@@ -275,11 +279,7 @@ pub fn FaqPage() -> impl IntoView {
         ),
         (
             "Can I correct a bad result or wrong matchup?",
-            "That is a first-class workflow. Coach tools support swaps, voiding, and partial match duration handling because real sessions rarely stay perfectly clean.",
-        ),
-        (
-            "What do the advanced tabs mean?",
-            "Overall rankings answer the core team-impact question. The A/D/T view breaks output into attack, defense, and teamwork once enough matches exist. Synergy estimates which pairings outperform expectation together.",
+            "Coach tools support swaps, voiding, and partial match duration handling because real sessions rarely stay perfectly clean.",
         ),
         (
             "Can I export rankings?",
@@ -302,6 +302,10 @@ pub fn FaqPage() -> impl IntoView {
             "Yes. The worker is thin and the core logic lives in Rust, so the sync layer can be replaced by another backend without touching the coach app.",
         ),
                 (
+            "My online session is seeing quota limits, how do I prevent this?",
+            "The current hosting plan has a maximum global pool of 100000 daily online session calls. That may sound like a lot, but with each schedule refresh from a player counting as a call, this can add up quickly. This should not stop usage of the main coach device. We recommend having a backup plan of sharing schedules over group chat apps. If you see this issue routinely, file an issue on GitHub (see below).",
+        ),
+        (
             "How do I report Bugs and Issues?",
             "You can report bugs and issues by opening an issue on the GitHub repository: https://github.com/winedarksea/pcplayerpicker/issues",
         ),

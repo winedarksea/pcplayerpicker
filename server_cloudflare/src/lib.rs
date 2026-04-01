@@ -1,4 +1,6 @@
 use app_core::events::EventEnvelope;
+use base64::Engine;
+use core::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 
 /// PCPlayerPicker — Cloudflare Worker entry point.
@@ -17,7 +19,8 @@ use serde::{Deserialize, Serialize};
 ///   POST /api/sessions/:id/pin               → set/update coach recovery PIN
 ///   POST /api/sessions/:id/recover           → validate PIN, return all events
 ///   GET  /api/t/:token                       → resolve token to session
-///   GET  /api/admin/sessions                 → list sessions (secret key)
+///   GET  /api/admin/sessions                 → admin JSON overview (secret key)
+///   GET  /_internal/admin/sessions          → hidden admin HTML overview
 ///   GET  /api/health                         → liveness check
 use worker::*;
 
@@ -38,6 +41,12 @@ const ARCHIVE_AFTER_DAYS: f64 = 90.0;
 
 /// Archived session summaries are pruned after this many days.
 const ARCHIVE_RETENTION_DAYS: f64 = 365.0;
+
+/// Hidden admin view should stay lightweight and scan a bounded page.
+const ADMIN_SESSIONS_PAGE_LIMIT: usize = 200;
+
+/// Single-row cache key for the precomputed admin payload.
+const ADMIN_SNAPSHOT_PRIMARY_KEY: &str = "online_sessions_overview";
 
 // ── Token generation ─────────────────────────────────────────────────────────
 
@@ -119,6 +128,37 @@ struct ReservedSequenceRangeRow {
     cursor: u32,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct AdminOverviewResponse {
+    generated_at: f64,
+    generated_at_iso: String,
+    totals: AdminOverviewTotals,
+    sessions: Vec<AdminSessionOverviewRow>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AdminOverviewTotals {
+    total_sessions: u32,
+    live_sessions: u32,
+    archived_sessions: u32,
+    sessions_last_24h: u32,
+    sessions_last_7d: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AdminSessionOverviewRow {
+    session_id: String,
+    created_at: f64,
+    created_at_iso: String,
+    archived_at: Option<f64>,
+    archived_at_iso: Option<String>,
+    status: String,
+    sport: String,
+    team_size: Option<u8>,
+    player_count: usize,
+    ranking_count: usize,
+}
+
 // ── Allowed CORS origins ──────────────────────────────────────────────────────
 
 const ALLOWED_ORIGINS: &[&str] = &[
@@ -152,7 +192,7 @@ fn with_cors(mut resp: Response, origin: &str) -> Response {
     let _ = h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     let _ = h.set(
         "Access-Control-Allow-Headers",
-        "Content-Type, X-Token, X-Coach-Key",
+        "Authorization, Content-Type, X-Token, X-Coach-Key",
     );
     let _ = h.set("Vary", "Origin");
     resp
@@ -251,6 +291,463 @@ async fn parse_json_req<T: serde::de::DeserializeOwned>(
     serde_json::from_str(&body_text).map_err(|e| format!("Invalid JSON: {}", e))
 }
 
+#[cfg(target_arch = "wasm32")]
+fn format_timestamp_ms_as_iso(timestamp_ms: f64) -> String {
+    js_sys::Date::new(&worker::wasm_bindgen::JsValue::from_f64(timestamp_ms))
+        .to_iso_string()
+        .into()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn format_timestamp_ms_as_iso(timestamp_ms: f64) -> String {
+    format!("{timestamp_ms:.0}")
+}
+
+fn parse_optional_u32(row: &serde_json::Value, field_name: &str) -> u32 {
+    row.get(field_name)
+        .and_then(|value| value.as_u64().or_else(|| value.as_f64().map(|n| n as u64)))
+        .unwrap_or(0) as u32
+}
+
+fn parse_optional_u8(row: &serde_json::Value, field_name: &str) -> Option<u8> {
+    row.get(field_name)
+        .and_then(|value| value.as_u64().or_else(|| value.as_f64().map(|n| n as u64)))
+        .and_then(|value| u8::try_from(value).ok())
+}
+
+fn parse_optional_f64(row: &serde_json::Value, field_name: &str) -> Option<f64> {
+    row.get(field_name).and_then(|value| value.as_f64())
+}
+
+fn parse_optional_string(row: &serde_json::Value, field_name: &str) -> Option<String> {
+    row.get(field_name)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+fn json_member_count(raw_json: Option<&str>) -> usize {
+    let Some(raw_json) = raw_json else {
+        return 0;
+    };
+    match serde_json::from_str::<serde_json::Value>(raw_json) {
+        Ok(serde_json::Value::Array(items)) => items.len(),
+        Ok(serde_json::Value::Object(map)) => map.len(),
+        _ => 0,
+    }
+}
+
+fn build_admin_session_overview_row(
+    row: &serde_json::Value,
+    is_live: bool,
+) -> AdminSessionOverviewRow {
+    let session_id = parse_optional_string(row, "id").unwrap_or_default();
+    let created_at = parse_optional_f64(row, "created_at").unwrap_or(0.0);
+    let archived_at = parse_optional_f64(row, "archived_at");
+    let sport = parse_optional_string(row, "sport")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    let team_size = parse_optional_u8(row, "team_size");
+    let player_count = json_member_count(parse_optional_string(row, "player_names").as_deref());
+    let ranking_count = json_member_count(parse_optional_string(row, "final_rankings").as_deref());
+    let has_archive = archived_at.is_some();
+    let status = match (is_live, has_archive) {
+        (true, true) => "live+archived",
+        (true, false) => "live-only",
+        (false, true) => "archived-only",
+        (false, false) => "unknown",
+    };
+
+    AdminSessionOverviewRow {
+        session_id,
+        created_at,
+        created_at_iso: format_timestamp_ms_as_iso(created_at),
+        archived_at,
+        archived_at_iso: archived_at.map(format_timestamp_ms_as_iso),
+        status: status.to_string(),
+        sport,
+        team_size,
+        player_count,
+        ranking_count,
+    }
+}
+
+fn html_escape(raw: &str) -> String {
+    raw.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn timing_safe_eq(left: &str, right: &str) -> bool {
+    let left_bytes = left.as_bytes();
+    let right_bytes = right.as_bytes();
+    let mut diff = left_bytes.len() ^ right_bytes.len();
+    let max_len = left_bytes.len().max(right_bytes.len());
+
+    for index in 0..max_len {
+        let left_byte = left_bytes.get(index).copied().unwrap_or(0);
+        let right_byte = right_bytes.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+
+    diff == 0
+}
+
+fn parse_basic_auth_password(header_value: &str) -> Option<String> {
+    let encoded = header_value.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (_, password) = decoded.split_once(':')?;
+    Some(password.to_string())
+}
+
+fn header_has_admin_access(
+    x_token_header: Option<&str>,
+    authorization_header: Option<&str>,
+    admin_secret: &str,
+) -> bool {
+    if admin_secret.is_empty() {
+        return false;
+    }
+
+    if let Some(header_value) = x_token_header {
+        if timing_safe_eq(header_value.trim(), admin_secret) {
+            return true;
+        }
+    }
+
+    if let Some(header_value) = authorization_header {
+        if let Some(token) = header_value.strip_prefix("Bearer ") {
+            if timing_safe_eq(token.trim(), admin_secret) {
+                return true;
+            }
+        }
+
+        if let Some(password) = parse_basic_auth_password(header_value) {
+            if timing_safe_eq(password.trim(), admin_secret) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn request_has_admin_access(req: &Request, admin_secret: &str) -> bool {
+    let x_token_header = req.headers().get("X-Token").ok().flatten();
+    let authorization_header = req.headers().get("Authorization").ok().flatten();
+    header_has_admin_access(
+        x_token_header.as_deref(),
+        authorization_header.as_deref(),
+        admin_secret,
+    )
+}
+
+fn with_admin_security_headers(mut resp: Response, is_html: bool) -> Response {
+    let headers = resp.headers_mut();
+    let _ = headers.set("Cache-Control", "no-store, max-age=0");
+    let _ = headers.set("Pragma", "no-cache");
+    let _ = headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
+    let _ = headers.set("X-Frame-Options", "DENY");
+    let _ = headers.set("Referrer-Policy", "same-origin");
+    if is_html {
+        let _ = headers.set(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+        );
+    }
+    resp
+}
+
+fn admin_unauthorized_json(origin: &str) -> Result<Response> {
+    let mut resp = Response::error("Unauthorized", 401)?;
+    let _ = resp
+        .headers_mut()
+        .set("WWW-Authenticate", r#"Basic realm="PPP Admin""#);
+    Ok(with_admin_security_headers(with_cors(resp, origin), false))
+}
+
+fn admin_unauthorized_html() -> Result<Response> {
+    let mut resp = Response::error("Unauthorized", 401)?;
+    let headers = resp.headers_mut();
+    let _ = headers.set("Content-Type", "text/plain; charset=utf-8");
+    let _ = headers.set("WWW-Authenticate", r#"Basic realm="PPP Admin""#);
+    Ok(with_admin_security_headers(resp, false))
+}
+
+async fn fetch_count(statement: D1PreparedStatement) -> Result<u32> {
+    let row = statement.first::<serde_json::Value>(None).await?;
+    Ok(row
+        .as_ref()
+        .map(|row| parse_optional_u32(row, "count"))
+        .unwrap_or(0))
+}
+
+async fn build_admin_overview(env: &Env) -> Result<AdminOverviewResponse> {
+    let db = env.d1("DB")?;
+    let now = js_sys::Date::now();
+    let last_24h_cutoff = now - 86_400_000.0;
+    let last_7d_cutoff = now - 7.0 * 86_400_000.0;
+
+    let live_sessions = fetch_count(db.prepare("SELECT COUNT(*) AS count FROM sessions")).await?;
+    let archived_sessions =
+        fetch_count(db.prepare("SELECT COUNT(*) AS count FROM archived_sessions")).await?;
+    let total_sessions = fetch_count(db.prepare(
+        "SELECT COUNT(*) AS count FROM \
+             (SELECT id, created_at FROM sessions \
+              UNION \
+              SELECT id, created_at FROM archived_sessions)",
+    ))
+    .await?;
+    let sessions_last_24h = fetch_count(
+        db.prepare(
+            "SELECT COUNT(*) AS count FROM \
+             (SELECT id, created_at FROM sessions \
+              UNION \
+              SELECT id, created_at FROM archived_sessions) \
+             WHERE created_at >= ?1",
+        )
+        .bind(&[d1_number(last_24h_cutoff)])?,
+    )
+    .await?;
+    let sessions_last_7d = fetch_count(
+        db.prepare(
+            "SELECT COUNT(*) AS count FROM \
+             (SELECT id, created_at FROM sessions \
+              UNION \
+              SELECT id, created_at FROM archived_sessions) \
+             WHERE created_at >= ?1",
+        )
+        .bind(&[d1_number(last_7d_cutoff)])?,
+    )
+    .await?;
+    let live_rows = db
+        .prepare(
+            "SELECT s.id, s.created_at, \
+                    a.archived_at, a.sport, a.team_size, a.player_names, a.final_rankings \
+             FROM sessions s \
+             LEFT JOIN archived_sessions a ON a.id = s.id \
+             ORDER BY s.created_at DESC \
+             LIMIT ?1",
+        )
+        .bind(&[d1_u32(ADMIN_SESSIONS_PAGE_LIMIT as u32)])?
+        .all()
+        .await?;
+    let archived_only_rows = db
+        .prepare(
+            "SELECT a.id, a.created_at, \
+                    a.archived_at, a.sport, a.team_size, a.player_names, a.final_rankings \
+             FROM archived_sessions a \
+             LEFT JOIN sessions s ON s.id = a.id \
+             WHERE s.id IS NULL \
+             ORDER BY a.created_at DESC \
+             LIMIT ?1",
+        )
+        .bind(&[d1_u32(ADMIN_SESSIONS_PAGE_LIMIT as u32)])?
+        .all()
+        .await?;
+
+    let mut sessions = Vec::new();
+    for row in live_rows.results::<serde_json::Value>()? {
+        sessions.push(build_admin_session_overview_row(&row, true));
+    }
+    for row in archived_only_rows.results::<serde_json::Value>()? {
+        sessions.push(build_admin_session_overview_row(&row, false));
+    }
+
+    sessions.sort_by(|left, right| {
+        right
+            .created_at
+            .partial_cmp(&left.created_at)
+            .unwrap_or(Ordering::Equal)
+    });
+    sessions.truncate(ADMIN_SESSIONS_PAGE_LIMIT);
+
+    Ok(AdminOverviewResponse {
+        generated_at: now,
+        generated_at_iso: format_timestamp_ms_as_iso(now),
+        totals: AdminOverviewTotals {
+            total_sessions,
+            live_sessions,
+            archived_sessions,
+            sessions_last_24h,
+            sessions_last_7d,
+        },
+        sessions,
+    })
+}
+
+async fn refresh_admin_overview_snapshot(env: &Env) -> Result<()> {
+    let overview = build_admin_overview(env).await?;
+    let payload =
+        serde_json::to_string(&overview).map_err(|error| Error::from(error.to_string()))?;
+    let db = env.d1("DB")?;
+    db.prepare(
+        "INSERT INTO admin_snapshots (snapshot_key, updated_at, payload) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(snapshot_key) DO UPDATE SET \
+             updated_at = excluded.updated_at, \
+             payload = excluded.payload",
+    )
+    .bind(&[
+        ADMIN_SNAPSHOT_PRIMARY_KEY.into(),
+        d1_number(js_sys::Date::now()),
+        payload.as_str().into(),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+async fn load_admin_overview_snapshot(env: &Env) -> Result<AdminOverviewResponse> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare("SELECT payload FROM admin_snapshots WHERE snapshot_key = ?1")
+        .bind(&[ADMIN_SNAPSHOT_PRIMARY_KEY.into()])?
+        .first::<serde_json::Value>(None)
+        .await?;
+
+    if let Some(row) = row {
+        if let Some(payload) = parse_optional_string(&row, "payload") {
+            if let Ok(overview) = serde_json::from_str::<AdminOverviewResponse>(&payload) {
+                return Ok(overview);
+            }
+        }
+    }
+
+    // Backfill only when the snapshot is missing or corrupted. Normal admin
+    // requests read the precomputed row and do not run the overview queries.
+    let overview = build_admin_overview(env).await?;
+    let payload =
+        serde_json::to_string(&overview).map_err(|error| Error::from(error.to_string()))?;
+    db.prepare(
+        "INSERT INTO admin_snapshots (snapshot_key, updated_at, payload) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(snapshot_key) DO UPDATE SET \
+             updated_at = excluded.updated_at, \
+             payload = excluded.payload",
+    )
+    .bind(&[
+        ADMIN_SNAPSHOT_PRIMARY_KEY.into(),
+        d1_number(js_sys::Date::now()),
+        payload.as_str().into(),
+    ])?
+    .run()
+    .await?;
+    Ok(overview)
+}
+
+fn render_admin_html_page(overview: &AdminOverviewResponse) -> String {
+    let mut rows_html = String::new();
+    for session in &overview.sessions {
+        let team_size = session
+            .team_size
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "—".to_string());
+        let sport = if session.sport.is_empty() {
+            "—".to_string()
+        } else {
+            html_escape(&session.sport)
+        };
+        let archived_at = session
+            .archived_at_iso
+            .as_deref()
+            .map(html_escape)
+            .unwrap_or_else(|| "—".to_string());
+        rows_html.push_str(&format!(
+            "<tr>\
+                <td><code>{}</code></td>\
+                <td>{}</td>\
+                <td>{}</td>\
+                <td>{}</td>\
+                <td>{}</td>\
+                <td>{}</td>\
+                <td>{}</td>\
+                <td>{}</td>\
+            </tr>",
+            html_escape(&session.session_id),
+            html_escape(&session.created_at_iso),
+            archived_at,
+            html_escape(&session.status),
+            sport,
+            team_size,
+            session.player_count,
+            session.ranking_count,
+        ));
+    }
+
+    if rows_html.is_empty() {
+        rows_html.push_str(
+            "<tr><td colspan=\"8\">No uploaded sessions found in live or archived storage.</td></tr>",
+        );
+    }
+
+    format!(
+        "<!doctype html>\
+         <html lang=\"en\">\
+         <head>\
+           <meta charset=\"utf-8\">\
+           <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+           <title>PPP Admin Sessions</title>\
+           <style>\
+             :root {{ color-scheme: light; }}\
+             body {{ margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #f5f1e8; color: #1f2937; }}\
+             main {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}\
+             h1 {{ margin: 0 0 8px; font-size: 22px; }}\
+             p {{ margin: 0 0 16px; color: #4b5563; }}\
+             .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 20px 0 24px; }}\
+             .card {{ background: #fffdf8; border: 1px solid #d6d0c4; border-radius: 10px; padding: 12px; }}\
+             .label {{ display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7280; }}\
+             .value {{ display: block; margin-top: 6px; font-size: 22px; color: #111827; }}\
+             table {{ width: 100%; border-collapse: collapse; background: #fffdf8; border: 1px solid #d6d0c4; }}\
+             th, td {{ padding: 10px 12px; border-bottom: 1px solid #e5ded0; text-align: left; vertical-align: top; }}\
+             th {{ font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7280; background: #f8f4eb; }}\
+             tr:last-child td {{ border-bottom: none; }}\
+             code {{ font-size: 12px; }}\
+           </style>\
+         </head>\
+         <body>\
+           <main>\
+             <h1>Online Session Overview</h1>\
+             <p>Generated {generated_at}. This hidden page is served directly by the Worker and is not linked from the public app.</p>\
+             <section class=\"stats\">\
+               <div class=\"card\"><span class=\"label\">Total Sessions</span><span class=\"value\">{total_sessions}</span></div>\
+               <div class=\"card\"><span class=\"label\">Live Sessions</span><span class=\"value\">{live_sessions}</span></div>\
+               <div class=\"card\"><span class=\"label\">Archived Sessions</span><span class=\"value\">{archived_sessions}</span></div>\
+               <div class=\"card\"><span class=\"label\">Created 24h</span><span class=\"value\">{sessions_last_24h}</span></div>\
+               <div class=\"card\"><span class=\"label\">Created 7d</span><span class=\"value\">{sessions_last_7d}</span></div>\
+             </section>\
+             <table>\
+               <thead>\
+                 <tr>\
+                   <th>Session</th>\
+                   <th>Created</th>\
+                   <th>Archived</th>\
+                   <th>Status</th>\
+                   <th>Sport</th>\
+                   <th>Team</th>\
+                   <th>Players</th>\
+                   <th>Ranked</th>\
+                 </tr>\
+               </thead>\
+               <tbody>{rows}</tbody>\
+             </table>\
+           </main>\
+         </body>\
+         </html>",
+        generated_at = html_escape(&overview.generated_at_iso),
+        total_sessions = overview.totals.total_sessions,
+        live_sessions = overview.totals.live_sessions,
+        archived_sessions = overview.totals.archived_sessions,
+        sessions_last_24h = overview.totals.sessions_last_24h,
+        sessions_last_7d = overview.totals.sessions_last_7d,
+        rows = rows_html,
+    )
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[event(fetch)]
@@ -269,7 +766,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         let _ = h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         let _ = h.set(
             "Access-Control-Allow-Headers",
-            "Content-Type, X-Token, X-Coach-Key",
+            "Authorization, Content-Type, X-Token, X-Coach-Key",
         );
         let _ = h.set("Vary", "Origin");
         return Ok(resp);
@@ -298,8 +795,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Session-scoped routes
         _ if path.starts_with("/api/sessions/") => route_session(req, &env, &path, &origin).await,
 
-        // Admin: list all sessions (requires X-Token: $PPP_ADMIN_SECRET header)
+        // Admin JSON: summarized session overview (secret required)
         (Method::Get, "/api/admin/sessions") => handle_admin_sessions(req, &env, &origin).await,
+
+        // Hidden admin page: server-rendered overview (secret required)
+        (Method::Get, "/_internal/admin/sessions") => handle_admin_sessions_page(req, &env).await,
 
         _ if path.starts_with("/api/") => err_json("Not found", 404, &origin),
 
@@ -483,6 +983,7 @@ async fn handle_upload(mut req: Request, env: &Env, origin: &str) -> Result<Resp
         }
     };
 
+    let _ = refresh_admin_overview_snapshot(env).await;
     ok_json(
         &UploadResponse {
             ok: true,
@@ -963,25 +1464,44 @@ async fn handle_set_token_pin(
     ok_json(&serde_json::json!({ "ok": true }), origin)
 }
 
-/// GET /api/admin/sessions — requires X-Token matching PPP_ADMIN_SECRET env var
+/// GET /api/admin/sessions — returns a high-level overview for live and archived
+/// online sessions. Accepts `X-Token`, `Authorization: Bearer`, or HTTP Basic
+/// auth where the password matches `PPP_ADMIN_SECRET`.
 async fn handle_admin_sessions(req: Request, env: &Env, origin: &str) -> Result<Response> {
-    let provided = req.headers().get("X-Token")?.unwrap_or_default();
     let secret = env
         .var("PPP_ADMIN_SECRET")
         .map(|v| v.to_string())
         .unwrap_or_default();
-    if secret.is_empty() || provided != secret {
-        return err_json("Unauthorized", 401, origin);
+    if !request_has_admin_access(&req, &secret) {
+        return admin_unauthorized_json(origin);
     }
 
-    let db = env.d1("DB")?;
-    let rows = db
-        .prepare("SELECT id, created_at FROM sessions ORDER BY created_at DESC LIMIT 100")
-        .all()
-        .await?;
+    let overview = load_admin_overview_snapshot(env).await?;
+    Ok(with_admin_security_headers(
+        with_cors(Response::from_json(&overview)?, origin),
+        false,
+    ))
+}
 
-    let sessions: Vec<serde_json::Value> = rows.results()?;
-    ok_json(&serde_json::json!({ "sessions": sessions }), origin)
+/// GET /_internal/admin/sessions — hidden server-rendered admin page.
+/// Uses the same authorization rules as the JSON endpoint and is intentionally
+/// not linked from the public SPA.
+async fn handle_admin_sessions_page(req: Request, env: &Env) -> Result<Response> {
+    let secret = env
+        .var("PPP_ADMIN_SECRET")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    if !request_has_admin_access(&req, &secret) {
+        return admin_unauthorized_html();
+    }
+
+    let overview = load_admin_overview_snapshot(env).await?;
+    let html = render_admin_html_page(&overview);
+    let mut resp = Response::from_body(ResponseBody::Body(html.into_bytes()))?;
+    let _ = resp
+        .headers_mut()
+        .set("Content-Type", "text/html; charset=utf-8");
+    Ok(with_admin_security_headers(resp, true))
 }
 
 /// POST /api/sessions/:id/archive
@@ -1071,6 +1591,7 @@ async fn handle_archive_session(
     .run()
     .await?;
 
+    let _ = refresh_admin_overview_snapshot(env).await;
     ok_json(&serde_json::json!({ "ok": true }), origin)
 }
 
@@ -1282,6 +1803,7 @@ mod cleanup_job {
             .run()
             .await?;
 
+        let _ = refresh_admin_overview_snapshot(&env).await;
         Ok(())
     }
 }
@@ -1350,7 +1872,10 @@ async fn get_or_create_tokens(session_id: &str, db: &D1Database) -> Result<(Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{build_events_response_json_body, StoredEventRow};
+    use super::{
+        build_admin_session_overview_row, build_events_response_json_body, header_has_admin_access,
+        parse_basic_auth_password, timing_safe_eq, StoredEventRow,
+    };
 
     #[test]
     fn build_events_response_json_body_keeps_stored_payloads_verbatim() {
@@ -1377,5 +1902,57 @@ mod tests {
             build_events_response_json_body(&[], 12),
             "{\"events\":[],\"cursor\":12}"
         );
+    }
+
+    #[test]
+    fn parse_basic_auth_password_reads_the_password_field() {
+        assert_eq!(
+            parse_basic_auth_password("Basic dXNlcjpzZWNyZXQ=").as_deref(),
+            Some("secret")
+        );
+        assert_eq!(parse_basic_auth_password("Bearer secret"), None);
+    }
+
+    #[test]
+    fn timing_safe_eq_matches_only_identical_values() {
+        assert!(timing_safe_eq("secret", "secret"));
+        assert!(!timing_safe_eq("secret", "Secret"));
+        assert!(!timing_safe_eq("secret", "secret2"));
+    }
+
+    #[test]
+    fn header_has_admin_access_accepts_basic_bearer_and_x_token() {
+        assert!(header_has_admin_access(
+            None,
+            Some("Basic dXNlcjpzZWNyZXQ="),
+            "secret",
+        ));
+        assert!(header_has_admin_access(
+            None,
+            Some("Bearer secret"),
+            "secret"
+        ));
+        assert!(header_has_admin_access(Some("secret"), None, "secret"));
+        assert!(!header_has_admin_access(Some("wrong"), None, "secret"));
+    }
+
+    #[test]
+    fn build_admin_session_overview_row_counts_players_and_rankings() {
+        let row = serde_json::json!({
+            "id": "session-1",
+            "created_at": 1_700_000_000_000.0,
+            "archived_at": 1_700_000_100_000.0,
+            "sport": "Soccer",
+            "team_size": 5,
+            "player_names": "{\"1\":\"Alice\",\"2\":\"Bob\",\"3\":\"Casey\"}",
+            "final_rankings": "[{\"player_id\":\"1\"},{\"player_id\":\"2\"}]"
+        });
+
+        let built = build_admin_session_overview_row(&row, true);
+        assert_eq!(built.session_id, "session-1");
+        assert_eq!(built.status, "live+archived");
+        assert_eq!(built.player_count, 3);
+        assert_eq!(built.ranking_count, 2);
+        assert_eq!(built.team_size, Some(5));
     }
 }
