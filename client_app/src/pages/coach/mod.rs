@@ -1,5 +1,6 @@
 pub mod dashboard;
 pub mod home;
+mod schedule_export;
 pub mod setup;
 
 // Only re-export what main.rs needs; tab components are used internally by DashboardPage

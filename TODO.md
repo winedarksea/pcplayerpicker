@@ -30,7 +30,7 @@ Treat dropouts as a first-class workflow:
 * removed from future scheduling but retained in reports
 
 References:
-True Skill, True Skill 2, OpenSkill
+OpenSkill
 https://github.com/vivekjoshy/openskill.py
 https://openreview.net/forum?id=UZZaWUR0n4
 

@@ -1,9 +1,12 @@
+#[cfg_attr(not(test), allow(dead_code))]
 pub const READ_ONLY_POLL_INTERVAL_MS: u32 = 60_000;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const READ_ONLY_MAX_POLL_INTERVAL_MS: u32 = 600_000;
 pub const READ_ONLY_ACTIVATION_REFRESH_DEBOUNCE_MS: f64 = 60_000.0;
 
 /// Quiet read-only views can back off after repeated empty polls without
 /// impacting score-entry latency, because the user can still force a refresh.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn next_read_only_poll_interval_ms(current_ms: u32, saw_new_events: bool) -> u32 {
     if saw_new_events {
         return READ_ONLY_POLL_INTERVAL_MS;

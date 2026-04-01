@@ -24,11 +24,13 @@ js-sys = "0.3"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 web-sys = { version = "0.3", features = [
+    "CanvasRenderingContext2d",
     "Window",
     "MediaQueryList",
     "Document",
     "Element",
     "HtmlAnchorElement",
+    "HtmlCanvasElement",
     "HtmlElement",
     "Navigator",
     "ServiceWorkerContainer",

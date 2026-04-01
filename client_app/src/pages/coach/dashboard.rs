@@ -1,3 +1,7 @@
+use super::schedule_export::{
+    build_round_schedule_share_snapshot, copy_text_to_clipboard, format_round_schedule_share_text,
+    share_round_schedule_image, RoundScheduleImageShareOutcome,
+};
 use crate::coach_sync::pull_assistant_score_events;
 use crate::meta::use_page_meta;
 use crate::state::{load_session, save_session, AppContext};
@@ -181,6 +185,38 @@ pub fn MatchesTab() -> impl IntoView {
     // Per-match swap selections: (match_id, old_player_id, new_player_id)
     let swap_old: RwSignal<Option<PlayerId>> = RwSignal::new(None);
     let swap_new: RwSignal<Option<PlayerId>> = RwSignal::new(None);
+    let round_share_status_message: RwSignal<String> = RwSignal::new(String::new());
+    let round_share_image_is_busy = RwSignal::new(false);
+
+    let current_round_share_snapshot = {
+        let ctx = ctx.clone();
+        move || {
+            ctx.session.with(|session| {
+                let manager = session.as_ref()?;
+                let config = manager.state.config.as_ref()?;
+                let current_round_number = manager.state.current_round.0;
+                let round_matches: Vec<_> = manager
+                    .state
+                    .matches
+                    .values()
+                    .filter(|scheduled_match| {
+                        scheduled_match.round.0 == current_round_number
+                            && scheduled_match.status != MatchStatus::Voided
+                    })
+                    .collect();
+                if round_matches.is_empty() {
+                    return None;
+                }
+
+                Some(build_round_schedule_share_snapshot(
+                    format!("{} {}v{}", config.sport, config.team_size, config.team_size),
+                    current_round_number,
+                    &manager.state.players,
+                    &round_matches,
+                ))
+            })
+        }
+    };
 
     let on_generate = {
         let ctx = ctx.clone();
@@ -299,6 +335,49 @@ pub fn MatchesTab() -> impl IntoView {
         }
     };
 
+    let on_copy_round_text = {
+        move |_| {
+            let Some(round_share_snapshot) = current_round_share_snapshot() else {
+                round_share_status_message.set("Generate a round schedule first.".to_string());
+                return;
+            };
+            round_share_status_message.set("Copying round text…".to_string());
+            let share_text = format_round_schedule_share_text(&round_share_snapshot);
+            leptos::task::spawn_local(async move {
+                match copy_text_to_clipboard(&share_text).await {
+                    Ok(()) => round_share_status_message.set("Round text copied.".to_string()),
+                    Err(error_message) => round_share_status_message.set(error_message),
+                }
+            });
+        }
+    };
+
+    let on_share_round_image = {
+        move |_| {
+            let Some(round_share_snapshot) = current_round_share_snapshot() else {
+                round_share_status_message.set("Generate a round schedule first.".to_string());
+                return;
+            };
+            round_share_image_is_busy.set(true);
+            round_share_status_message.set("Preparing round image…".to_string());
+            leptos::task::spawn_local(async move {
+                let share_result = share_round_schedule_image(&round_share_snapshot).await;
+                round_share_image_is_busy.set(false);
+                match share_result {
+                    Ok(RoundScheduleImageShareOutcome::SharedWithSystemSheet) => {
+                        round_share_status_message.set("Round image shared.".to_string());
+                    }
+                    Ok(RoundScheduleImageShareOutcome::DownloadedPngFallback) => {
+                        round_share_status_message.set(
+                            "Round image downloaded. Native share is unavailable here.".to_string(),
+                        );
+                    }
+                    Err(error_message) => round_share_status_message.set(error_message),
+                }
+            });
+        }
+    };
+
     view! {
         <div class="px-4 py-5 space-y-5">
             {move || {
@@ -364,6 +443,43 @@ pub fn MatchesTab() -> impl IntoView {
                                         {if round_matches.len() == 1 { "" } else { "es" }}
                                     </span>
                                 </div>
+                            </div>
+                            <div class="mb-4 rounded-xl border border-gray-700/50 bg-gray-900/70 p-4">
+                                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <p class="text-sm font-semibold text-white">
+                                            "Share This Round"
+                                        </p>
+                                        <p class="mt-1 text-xs text-gray-400">
+                                            "Copy a chat-friendly schedule or generate a shareable image without going online."
+                                        </p>
+                                    </div>
+                                    <div class="flex flex-col gap-2 sm:flex-row">
+                                        <button
+                                            class="min-h-[44px] rounded-lg border border-gray-600 bg-gray-800 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+                                            on:click=on_copy_round_text
+                                        >
+                                            "Copy Round Text"
+                                        </button>
+                                        <button
+                                            class="min-h-[44px] rounded-lg bg-teal-500 px-4 py-2 text-sm font-semibold text-slate-950 transition-colors hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                            on:click=on_share_round_image
+                                            disabled=move || round_share_image_is_busy.get()
+                                        >
+                                            {move || if round_share_image_is_busy.get() {
+                                                "Preparing Image…"
+                                            } else {
+                                                "Share Image"
+                                            }}
+                                        </button>
+                                    </div>
+                                </div>
+                                {move || {
+                                    let status_message = round_share_status_message.get();
+                                    (!status_message.is_empty()).then(|| view! {
+                                        <p class="mt-3 text-sm text-gray-300">{status_message}</p>
+                                    })
+                                }}
                             </div>
                             <div class="space-y-3">
                                 {round_matches.into_iter().map(|m| {
