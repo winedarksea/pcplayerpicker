@@ -11,6 +11,7 @@
 
 use app_core::events::EventEnvelope;
 use app_core::models::PlayerRanking;
+use js_sys::Function;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -198,10 +199,59 @@ fn response_header_summary(resp: &Response) -> String {
     parts.join(", ")
 }
 
+fn body_matches_cloudflare_daily_quota_error(raw_body: &str) -> bool {
+    let lowercase_body = raw_body.to_ascii_lowercase();
+    lowercase_body.contains("error 1027")
+        || lowercase_body.contains("error code: 1027")
+        || lowercase_body.contains("cloudflare error 1027")
+}
+
+fn next_midnight_utc_in_local_timezone_for_display() -> Option<String> {
+    Function::new_no_args(
+        r#"
+        const now = new Date();
+        const nextUtcMidnight = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() + 1,
+            0,
+            0,
+            0,
+            0
+        ));
+        return nextUtcMidnight.toLocaleString([], {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short"
+        });
+    "#,
+    )
+    .call0(&JsValue::NULL)
+    .ok()
+    .and_then(|value| value.as_string())
+    .filter(|value| !value.trim().is_empty())
+}
+
+fn format_cloudflare_daily_quota_error_for_display() -> String {
+    let reset_time_text = next_midnight_utc_in_local_timezone_for_display()
+        .map(|local_time| format!("midnight UTC ({local_time} in your local time)"))
+        .unwrap_or_else(|| "midnight UTC".to_string());
+    format!(
+        "Cloudflare Worker daily quota reached (Error 1027). Online sync should reset at {reset_time_text}. This coach session is still saved on this device and should remain available offline."
+    )
+}
+
 fn format_error_body_for_display(raw_body: &str) -> String {
     let trimmed = raw_body.trim();
     if trimmed.is_empty() {
         return String::new();
+    }
+
+    if body_matches_cloudflare_daily_quota_error(trimmed) {
+        return format_cloudflare_daily_quota_error_for_display();
     }
 
     let Ok(json_value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
@@ -459,7 +509,10 @@ pub async fn push_session_archive(
 
 #[cfg(test)]
 mod tests {
-    use super::{format_error_body_for_display, reflected_property_string};
+    use super::{
+        body_matches_cloudflare_daily_quota_error, format_error_body_for_display,
+        reflected_property_string,
+    };
     use wasm_bindgen::JsValue;
     use wasm_bindgen_test::*;
 
@@ -495,5 +548,19 @@ mod tests {
             format_error_body_for_display(body),
             "internal_server_error; route=POST /api/sessions; message=D1_TYPE_ERROR; session_id=\"abc\"; event_count=11"
         );
+    }
+
+    #[test]
+    fn body_matches_cloudflare_daily_quota_error_for_html_error_pages() {
+        let body = r#"<html><title>Cloudflare Error 1027</title><body>error code: 1027</body></html>"#;
+        assert!(body_matches_cloudflare_daily_quota_error(body));
+    }
+
+    #[wasm_bindgen_test]
+    fn format_error_body_for_display_rewrites_cloudflare_daily_quota_errors() {
+        let formatted = format_error_body_for_display("Cloudflare Error 1027");
+        assert!(formatted.contains("Cloudflare Worker daily quota reached (Error 1027)."));
+        assert!(formatted.contains("midnight UTC"));
+        assert!(formatted.contains("remain available offline"));
     }
 }
