@@ -10,6 +10,7 @@ use crate::models::{
     RoundNumber, ScheduledMatch, SessionConfig, SessionState, Sport,
 };
 use crate::rng::SessionRng;
+use crate::schedule_edit::{validate_round_schedule_update, RoundScheduleEditError};
 
 fn parse_sport(s: &str) -> Sport {
     match s.trim() {
@@ -230,16 +231,21 @@ impl SessionManager {
         self.state = crate::events::materialize(&self.log);
     }
 
-    pub fn swap_player(&mut self, match_id: MatchId, old_player: PlayerId, new_player: PlayerId) {
+    pub fn apply_round_schedule_update(
+        &mut self,
+        round: RoundNumber,
+        updated_matches: Vec<ScheduledMatch>,
+    ) -> Result<(), RoundScheduleEditError> {
+        validate_round_schedule_update(&self.state, round, &updated_matches)?;
         self.log.append(
-            Event::PlayerSwapped {
-                match_id,
-                old_player,
-                new_player,
+            Event::RoundScheduleUpdated {
+                round,
+                matches: updated_matches,
             },
             Role::Coach,
         );
         self.state = crate::events::materialize(&self.log);
+        Ok(())
     }
 
     pub fn void_match(&mut self, match_id: MatchId) {

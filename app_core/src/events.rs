@@ -43,6 +43,10 @@ pub enum Event {
         old_player: PlayerId,
         new_player: PlayerId,
     },
+    RoundScheduleUpdated {
+        round: RoundNumber,
+        matches: Vec<ScheduledMatch>,
+    },
     MatchVoided {
         match_id: MatchId,
     },
@@ -228,6 +232,12 @@ fn apply_event(state: &mut SessionState, event: &Event, entered_by: &Role) {
                 if let Some(score) = result.scores.remove(old_player) {
                     result.scores.insert(*new_player, score);
                 }
+            }
+        }
+
+        Event::RoundScheduleUpdated { round: _, matches } => {
+            for updated_match in matches {
+                state.matches.insert(updated_match.id, updated_match.clone());
             }
         }
 
