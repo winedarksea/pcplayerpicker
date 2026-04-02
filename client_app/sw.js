@@ -1,6 +1,11 @@
 const CACHE_NAME = "pcplayerpicker-shell-v5";
 const APP_SHELL = [
   "/",
+  "/index.html",
+  "/coach",
+  "/coach/setup",
+  "/tutorial",
+  "/faq",
   "/manifest.json",
   "/icon.svg",
   "/maskable-icon.svg",

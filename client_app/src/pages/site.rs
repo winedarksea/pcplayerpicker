@@ -58,7 +58,7 @@ pub fn LandingPage() -> impl IntoView {
                                     href="/coach"
                                     attr:class="inline-flex min-h-[52px] items-center justify-center rounded-2xl bg-teal-400 px-6 text-sm font-bold uppercase tracking-[0.14em] text-slate-950 transition hover:bg-teal-300"
                                 >
-                                    "Launch Coach App"
+                                    "Launch App"
                                 </A>
                                 <A
                                     href="/tutorial"
@@ -245,7 +245,7 @@ pub fn TutorialPage() -> impl IntoView {
                         href="/coach"
                         attr:class="inline-flex min-h-[52px] items-center justify-center rounded-2xl bg-teal-400 px-8 text-sm font-bold uppercase tracking-[0.14em] text-slate-950 transition hover:bg-teal-300"
                     >
-                        "Launch Coach App"
+                        "Launch App"
                     </A>
                 </div>
             </section>

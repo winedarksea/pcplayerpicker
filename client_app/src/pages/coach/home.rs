@@ -1,4 +1,5 @@
 use crate::meta::use_page_meta;
+use crate::pages::pwa::PwaInstallAndOfflineStatusCard;
 use crate::state::{delete_session, load_session_summaries, storage_get, storage_set, AppContext};
 use crate::sync::recover_session;
 use app_core::events::EventLog;
@@ -296,6 +297,8 @@ pub fn CoachHome() -> impl IntoView {
                     "Bayesian match scheduling · Player ranking"
                 </p>
             </header>
+
+            <PwaInstallAndOfflineStatusCard/>
 
             // ── New session button ────────────────────────────────────────────
             <div class="px-4 mb-6">
