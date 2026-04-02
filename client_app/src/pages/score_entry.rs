@@ -65,9 +65,11 @@ pub fn SharedScoreEntryCard<F>(
     #[prop(default = Role::Coach)] entered_by: Role,
     #[prop(default = "Save Scores")] submit_label: &'static str,
     #[prop(default = "Saved ✓")] saved_label: &'static str,
+    #[prop(default = "Cancel")] cancel_label: &'static str,
     #[prop(default = false)] auto_save: bool,
     #[prop(default = Signal::derive(|| false))] is_submitting: Signal<bool>,
     #[prop(optional)] footer_error: Option<Signal<String>>,
+    #[prop(optional)] on_cancel: Option<Rc<dyn Fn()>>,
 ) -> impl IntoView
 where
     F: Fn(MatchResult) + 'static + Clone,
@@ -234,6 +236,7 @@ where
     } else {
         Rc::new(|| {})
     };
+    let has_cancel = on_cancel.is_some();
 
     view! {
         <div class="bg-gray-900 border border-gray-700/50 rounded-xl overflow-hidden">
@@ -441,27 +444,72 @@ where
                 }
             })}
 
-            {move || footer_error.map(|error_signal| {
-                let error_text = error_signal.get();
-                (!error_text.is_empty()).then(|| view! {
-                    <p class="px-4 pb-2 text-xs text-red-400">{error_text}</p>
-                })
-            })}
+            {move || {
+                if let Some(error_signal) = footer_error {
+                    let error_text = error_signal.get();
+                    if !error_text.is_empty() {
+                        view! {
+                            <p class="px-4 pb-2 text-xs text-red-400">{error_text}</p>
+                        }
+                            .into_any()
+                    } else {
+                        ().into_any()
+                    }
+                } else {
+                    ().into_any()
+                }
+            }}
 
             {(!auto_save).then(|| view! {
                 <div class="px-4 pb-4">
-                <button
-                    class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors min-h-[48px]"
-                    disabled=move || is_submitting.get()
-                    on:click={
-                        let submit_current_result = Rc::clone(&submit_current_result);
-                        move |_| {
-                            submit_current_result();
-                        }
-                    }
-                >
-                    {submit_label}
-                </button>
+                    <div class="flex items-center gap-2">
+                        {if let Some(on_cancel) = on_cancel.clone() {
+                            view! {
+                                <button
+                                    class="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-200 font-semibold rounded-lg transition-colors min-h-[48px]"
+                                    on:click=move |_| on_cancel()
+                                >
+                                    {cancel_label}
+                                </button>
+                            }
+                                .into_any()
+                        } else {
+                            ().into_any()
+                        }}
+                        {if has_cancel {
+                            view! {
+                                <button
+                                    class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors min-h-[48px]"
+                                    disabled=move || is_submitting.get()
+                                    on:click={
+                                        let submit_current_result = Rc::clone(&submit_current_result);
+                                        move |_| {
+                                            submit_current_result();
+                                        }
+                                    }
+                                >
+                                    {submit_label}
+                                </button>
+                            }
+                                .into_any()
+                        } else {
+                            view! {
+                                <button
+                                    class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors min-h-[48px]"
+                                    disabled=move || is_submitting.get()
+                                    on:click={
+                                        let submit_current_result = Rc::clone(&submit_current_result);
+                                        move |_| {
+                                            submit_current_result();
+                                        }
+                                    }
+                                >
+                                    {submit_label}
+                                </button>
+                            }
+                                .into_any()
+                        }}
+                    </div>
                 </div>
             })}
         </div>

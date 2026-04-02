@@ -27,6 +27,7 @@ use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
+use std::rc::Rc;
 use std::collections::HashMap;
 use wasm_bindgen::JsCast;
 
@@ -671,6 +672,12 @@ fn MatchResultSummaryCard(
         {move || {
             if editing.get() {
                 let on_correct = on_correct.clone();
+                let on_cancel: Rc<dyn Fn()> = Rc::new({
+                    let editing = editing;
+                    move || {
+                        editing.set(false);
+                    }
+                });
                 view! {
                     <SharedScoreEntryCard
                         match_id=match_id
@@ -685,6 +692,8 @@ fn MatchResultSummaryCard(
                         show_duration_picker=true
                         auto_save=false
                         submit_label="Save Correction"
+                        cancel_label="Back"
+                        on_cancel=on_cancel
                         on_submit=move |r: MatchResult| {
                             on_correct(r);
                             editing.set(false);
@@ -702,7 +711,7 @@ fn MatchResultSummaryCard(
                             <div class="flex items-center gap-3">
                                 <span class="text-xs font-bold text-gray-200">{scoreline}</span>
                                 <button
-                                    class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                                    class="px-2.5 py-1 rounded-md text-xs font-semibold text-blue-300 border border-blue-500/40 hover:bg-blue-500/10 transition-colors"
                                     on:click=move |_| editing.set(true)
                                 >
                                     "Edit"
@@ -789,6 +798,14 @@ struct CurrentRoundScoreEntrySectionDefinition {
     cards: Vec<CurrentRoundScoreEntryCardDefinition>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CurrentRoundCompletionState {
+    round: u32,
+    non_voided_matches: usize,
+    all_terminal: bool,
+    all_non_voided_scored: bool,
+}
+
 #[component]
 pub fn ResultsTab() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext missing");
@@ -826,25 +843,156 @@ pub fn ResultsTab() -> impl IntoView {
         }
     };
 
-    let all_current_round_scored = {
+    let current_round_completion_state = {
         let ctx = ctx.clone();
         Memo::new(move |_| {
-            ctx.session.with(|session| -> Option<u32> {
+            ctx.session.with(|session| -> Option<CurrentRoundCompletionState> {
                 let manager = session.as_ref()?;
                 let round = manager.state.current_round;
-                let non_voided: Vec<_> = manager
+                let current_round_matches: Vec<_> = manager
                     .state
                     .matches
                     .values()
-                    .filter(|m| m.round == round && m.status != MatchStatus::Voided)
+                    .filter(|m| m.round == round)
                     .collect();
-                if non_voided.is_empty() {
+                if current_round_matches.is_empty() {
                     return None;
                 }
-                let all_scored = non_voided
+
+                let non_voided_matches: Vec<_> = current_round_matches
+                    .iter()
+                    .copied()
+                    .filter(|m| m.status != MatchStatus::Voided)
+                    .collect();
+                let non_voided_matches_len = non_voided_matches.len();
+                let all_non_voided_scored = non_voided_matches
                     .iter()
                     .all(|m| manager.state.results.contains_key(&m.id));
-                all_scored.then_some(round.0)
+                let all_terminal = current_round_matches.iter().all(|m| {
+                    m.status == MatchStatus::Completed || m.status == MatchStatus::Voided
+                });
+
+                Some(CurrentRoundCompletionState {
+                    round: round.0,
+                    non_voided_matches: non_voided_matches_len,
+                    all_terminal,
+                    all_non_voided_scored,
+                })
+            })
+        })
+    };
+
+    let on_generate_current_round = {
+        let ctx = ctx.clone();
+        move |_| {
+            ctx.session.update(|opt| {
+                let manager = match opt {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                let active_players: Vec<_> = manager.state.active_players().cloned().collect();
+                if active_players.is_empty() {
+                    return;
+                }
+
+                let config = match manager.state.config.clone() {
+                    Some(c) => c,
+                    None => return,
+                };
+
+                let rankings = manager.state.rankings.clone();
+                let existing_matches: Vec<_> = manager.state.matches.values().collect();
+                let starting_round = manager.state.current_round;
+                let num_rounds = config.scheduling_frequency as u32;
+                let scheduler = select_scheduler(&rankings);
+                let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+                    players: &active_players,
+                    rankings: &rankings,
+                    existing_matches: &existing_matches,
+                    config: &config,
+                    rng: &mut manager.rng,
+                    starting_round,
+                    num_rounds,
+                });
+                manager.log.append(
+                    Event::ScheduleGenerated {
+                        round: starting_round,
+                        matches,
+                    },
+                    Role::Coach,
+                );
+                manager.state = materialize(&manager.log);
+            });
+            ctx.session.with(|s| {
+                if let Some(m) = s {
+                    save_session(m);
+                }
+            });
+        }
+    };
+
+    let on_reseed_and_generate_current_round = {
+        let ctx = ctx.clone();
+        move |_| {
+            ctx.session.update(|opt| {
+                let manager = match opt {
+                    Some(m) => m,
+                    None => return,
+                };
+
+                manager.reseed();
+
+                let active_players: Vec<_> = manager.state.active_players().cloned().collect();
+                if active_players.is_empty() {
+                    return;
+                }
+
+                let config = match manager.state.config.clone() {
+                    Some(c) => c,
+                    None => return,
+                };
+
+                let rankings = manager.state.rankings.clone();
+                let existing_matches: Vec<_> = manager.state.matches.values().collect();
+                let starting_round = manager.state.current_round;
+                let num_rounds = config.scheduling_frequency as u32;
+                let scheduler = select_scheduler(&rankings);
+                let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+                    players: &active_players,
+                    rankings: &rankings,
+                    existing_matches: &existing_matches,
+                    config: &config,
+                    rng: &mut manager.rng,
+                    starting_round,
+                    num_rounds,
+                });
+                manager.log.append(
+                    Event::ScheduleGenerated {
+                        round: starting_round,
+                        matches,
+                    },
+                    Role::Coach,
+                );
+                manager.state = materialize(&manager.log);
+            });
+            ctx.session.with(|s| {
+                if let Some(m) = s {
+                    save_session(m);
+                }
+            });
+        }
+    };
+
+    let lockable_current_round = {
+        Memo::new(move |_| {
+            current_round_completion_state.get().and_then(|status| {
+                let can_complete = if status.non_voided_matches == 0 {
+                    status.all_terminal
+                } else {
+                    status.all_non_voided_scored
+                };
+                can_complete.then_some(status.round)
             })
         })
     };
@@ -993,8 +1141,8 @@ pub fn ResultsTab() -> impl IntoView {
                                     />
                                 }
                             }).collect_view()}
-                            {move || all_current_round_scored.get().map(|rnd| view! {
-                                <div class="pt-2">
+                            {move || lockable_current_round.get().map(|rnd| view! {
+                                <div class="pt-2 space-y-2">
                                     <button
                                         class="w-full py-3 bg-blue-700 hover:bg-blue-600 text-white \
                                                font-semibold rounded-xl transition-colors min-h-[48px]"
@@ -1002,6 +1150,40 @@ pub fn ResultsTab() -> impl IntoView {
                                     >
                                         "Complete Round "{rnd}" →"
                                     </button>
+                                    {move || {
+                                        current_round_completion_state
+                                            .get()
+                                            .filter(|status| {
+                                                status.round == rnd && status.non_voided_matches == 0
+                                            })
+                                            .map(|status| {
+                                                let round_label = status.round;
+                                                view! {
+                                                    <div class="rounded-xl border border-amber-500/30 bg-amber-950/20 p-3 space-y-2">
+                                                        <p class="text-xs text-amber-200">
+                                                            "All matches in Round "{round_label}" are voided."
+                                                        </p>
+                                                        <p class="text-xs text-amber-300/80">
+                                                            "To recover: adjust players in Matches or regenerate this round with a fresh seed."
+                                                        </p>
+                                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                            <button
+                                                                class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-100 text-sm font-medium rounded-lg transition-colors min-h-[42px]"
+                                                                on:click=on_generate_current_round
+                                                            >
+                                                                "Generate Replacement Round"
+                                                            </button>
+                                                            <button
+                                                                class="w-full py-2.5 bg-amber-700 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors min-h-[42px]"
+                                                                on:click=on_reseed_and_generate_current_round
+                                                            >
+                                                                "Re-seed + Regenerate"
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            })
+                                    }}
                                 </div>
                             })}
                         </div>
@@ -1009,7 +1191,7 @@ pub fn ResultsTab() -> impl IntoView {
                 }
             }}
 
-            // Past rounds — collapsible read-only history.
+            // Past rounds — collapsible history with optional coach corrections.
             {move || {
                 let session_opt = ctx.session.get();
                 let manager = match session_opt.as_ref() {
