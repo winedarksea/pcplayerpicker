@@ -376,14 +376,30 @@ where
 
             {(score_entry_mode == ScoreEntryMode::WinDrawLose).then({
                 let maybe_auto_save_current_result = Rc::clone(&maybe_auto_save_current_result);
+                let team_a_label = if team_a.len() == 1 {
+                    player_names
+                        .get(&team_a[0])
+                        .cloned()
+                        .unwrap_or_else(|| "Team A".to_string())
+                } else {
+                    "Team A".to_string()
+                };
+                let team_b_label = if team_b.len() == 1 {
+                    player_names
+                        .get(&team_b[0])
+                        .cloned()
+                        .unwrap_or_else(|| "Team B".to_string())
+                } else {
+                    "Team B".to_string()
+                };
                 move || view! {
                     <div class="px-4 pb-3 border-t border-gray-700/20 pt-3">
                         <p class="text-xs text-gray-500 mb-2">"Match outcome"</p>
                         <div class="flex gap-2 flex-wrap">
                             {[
-                                (MatchOutcome::TeamAWin, "Team A"),
-                                (MatchOutcome::Draw, "Draw"),
-                                (MatchOutcome::TeamBWin, "Team B"),
+                                (MatchOutcome::TeamAWin, team_a_label.clone()),
+                                (MatchOutcome::Draw, "Draw".to_string()),
+                                (MatchOutcome::TeamBWin, team_b_label.clone()),
                             ].into_iter().map(|(outcome, label)| {
                                 let auto_save_after_outcome_click = Rc::clone(&maybe_auto_save_current_result);
                                 view! {
