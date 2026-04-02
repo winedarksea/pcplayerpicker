@@ -1,3 +1,4 @@
+use gloo_timers::future::TimeoutFuture;
 use super::match_player_sheet::RoundPlayerChangeSheet;
 use super::schedule_export::{
     build_round_schedule_share_snapshot, copy_text_to_clipboard, format_round_schedule_share_text,
@@ -247,6 +248,7 @@ pub fn MatchesTab() -> impl IntoView {
     let player_change_sheet_match_id: RwSignal<Option<MatchId>> = RwSignal::new(None);
     let round_share_status_message: RwSignal<String> = RwSignal::new(String::new());
     let round_share_image_is_busy = RwSignal::new(false);
+    let reseed_flash = RwSignal::new(false);
 
     let current_round_share_snapshot = {
         let ctx = ctx.clone();
@@ -332,6 +334,72 @@ pub fn MatchesTab() -> impl IntoView {
                 if let Some(manager) = opt {
                     manager.reseed();
                 }
+            });
+            ctx.session.with(|s| {
+                if let Some(m) = s {
+                    save_session(m);
+                }
+            });
+            reseed_flash.set(true);
+            leptos::task::spawn_local(async move {
+                TimeoutFuture::new(2_000).await;
+                reseed_flash.set(false);
+            });
+        }
+    };
+
+    let on_regenerate_round = {
+        let ctx = ctx.clone();
+        move |_| {
+            let round = ctx
+                .session
+                .with(|s| s.as_ref().map(|m| m.state.current_round.0).unwrap_or(0));
+            if let Some(win) = web_sys::window() {
+                let msg = format!(
+                    "Regenerate the Round {} schedule?\n\nAll current results for this round will be lost. For smaller adjustments, use the \"Change Player\" option on individual matches.",
+                    round
+                );
+                let confirmed = win.confirm_with_message(&msg).unwrap_or(false);
+                if !confirmed {
+                    return;
+                }
+            }
+            ctx.session.update(|opt| {
+                let manager = match opt {
+                    Some(m) => m,
+                    None => return,
+                };
+                manager.reseed();
+                let active_players: Vec<_> = manager.state.active_players().cloned().collect();
+                if active_players.is_empty() {
+                    return;
+                }
+                let config = match manager.state.config.clone() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let rankings = manager.state.rankings.clone();
+                let existing_matches: Vec<_> = manager.state.matches.values().collect();
+                let starting_round = manager.state.current_round;
+                let num_rounds = config.scheduling_frequency as u32;
+                let scheduler = select_scheduler(&rankings);
+                let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
+                    players: &active_players,
+                    rankings: &rankings,
+                    existing_matches: &existing_matches,
+                    config: &config,
+                    rng: &mut manager.rng,
+                    starting_round,
+                    num_rounds,
+                });
+                manager.log.append(
+                    Event::ScheduleGenerated {
+                        round: starting_round,
+                        matches,
+                    },
+                    Role::Coach,
+                );
+                manager.state = materialize(&manager.log);
             });
             ctx.session.with(|s| {
                 if let Some(m) = s {
@@ -438,7 +506,7 @@ pub fn MatchesTab() -> impl IntoView {
                             >
                                 "Generate Round "{round}" Schedule"
                             </button>
-                            <div>
+                            <div class="flex items-center justify-center gap-2">
                                 <button
                                     class="text-xs text-gray-500 hover:text-gray-300 \
                                            underline underline-offset-2 transition-colors"
@@ -446,6 +514,9 @@ pub fn MatchesTab() -> impl IntoView {
                                 >
                                     "Re-seed RNG"
                                 </button>
+                                {move || reseed_flash.get().then(|| view! {
+                                    <span class="text-xs text-green-400">"✓ Seeded"</span>
+                                })}
                             </div>
                         </div>
                     }.into_any()
@@ -462,6 +533,17 @@ pub fn MatchesTab() -> impl IntoView {
                                         on:click=on_reseed
                                     >
                                         "Re-seed RNG"
+                                    </button>
+                                    {move || reseed_flash.get().then(|| view! {
+                                        <span class="text-xs text-green-400">"✓ Seeded"</span>
+                                    })}
+                                    <span class="text-gray-700">"|"</span>
+                                    <button
+                                        class="text-xs text-amber-600 hover:text-amber-400 \
+                                               underline underline-offset-2 transition-colors"
+                                        on:click=on_regenerate_round
+                                    >
+                                        "Regenerate Schedule"
                                     </button>
                                     <span class="text-sm text-gray-400">
                                         {round_matches.len()}" match"
