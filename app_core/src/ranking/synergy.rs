@@ -113,8 +113,12 @@ impl SynergyEngine {
         let match_lookup: HashMap<MatchId, &ScheduledMatch> =
             matches.iter().map(|sm| (sm.id, *sm)).collect();
 
+        let schedulable_pairs = count_schedulable_teammate_pairs(players, matches);
+        if schedulable_pairs == 0 {
+            return None;
+        }
         let observed = count_observed_teammate_pairs(players, results, &match_lookup);
-        if (observed as f64) < (total_pairs as f64) * MIN_TEAMMATE_PAIR_COVERAGE {
+        if (observed as f64) < (schedulable_pairs as f64) * MIN_TEAMMATE_PAIR_COVERAGE {
             return None;
         }
 
@@ -129,7 +133,7 @@ impl SynergyEngine {
                 continue;
             };
 
-            let weight = result.duration_multiplier.max(0.0);
+            let weight = result.normalized_duration_multiplier();
             if weight <= 0.0 {
                 continue;
             }
@@ -331,6 +335,36 @@ fn count_observed_teammate_pairs(
     observed.len()
 }
 
+fn count_schedulable_teammate_pairs(players: &[Player], matches: &[&ScheduledMatch]) -> usize {
+    let player_set: HashSet<PlayerId> = players.iter().map(|p| p.id).collect();
+    let mut schedulable: HashSet<(PlayerId, PlayerId)> = HashSet::new();
+    for scheduled in matches {
+        collect_scheduled_team_pairs(scheduled.team_a.as_slice(), &player_set, &mut schedulable);
+        collect_scheduled_team_pairs(scheduled.team_b.as_slice(), &player_set, &mut schedulable);
+    }
+    schedulable.len()
+}
+
+fn collect_scheduled_team_pairs(
+    team: &[PlayerId],
+    player_set: &HashSet<PlayerId>,
+    schedulable: &mut HashSet<(PlayerId, PlayerId)>,
+) {
+    let members: Vec<PlayerId> = team
+        .iter()
+        .copied()
+        .filter(|id| player_set.contains(id))
+        .collect();
+    for left in 0..members.len() {
+        for right in (left + 1)..members.len() {
+            let a = members[left];
+            let b = members[right];
+            let pair = if a.0 < b.0 { (a, b) } else { (b, a) };
+            schedulable.insert(pair);
+        }
+    }
+}
+
 fn observe_team_pairs(
     team: &[PlayerId],
     result: &MatchResult,
@@ -381,28 +415,49 @@ mod tests {
     #[test]
     fn synergy_returns_none_with_insufficient_same_team_coverage() {
         let engine = SynergyEngine::default();
-        let players = make_players(5);
-        let m = ScheduledMatch {
-            id: MatchId(1),
-            round: RoundNumber(1),
-            field: 1,
-            team_a: vec![PlayerId(1), PlayerId(2)],
-            team_b: vec![PlayerId(3), PlayerId(4)],
-            status: MatchStatus::Completed,
-        };
+        let players = make_players(4);
+        // Three matches schedule all six same-team pair combinations (6 schedulable pairs).
+        let sched = vec![
+            ScheduledMatch {
+                id: MatchId(1),
+                round: RoundNumber(1),
+                field: 1,
+                team_a: vec![PlayerId(1), PlayerId(2)],
+                team_b: vec![PlayerId(3), PlayerId(4)],
+                status: MatchStatus::Completed,
+            },
+            ScheduledMatch {
+                id: MatchId(2),
+                round: RoundNumber(2),
+                field: 1,
+                team_a: vec![PlayerId(1), PlayerId(3)],
+                team_b: vec![PlayerId(2), PlayerId(4)],
+                status: MatchStatus::Scheduled,
+            },
+            ScheduledMatch {
+                id: MatchId(3),
+                round: RoundNumber(3),
+                field: 1,
+                team_a: vec![PlayerId(1), PlayerId(4)],
+                team_b: vec![PlayerId(2), PlayerId(3)],
+                status: MatchStatus::Scheduled,
+            },
+        ];
+        // Only one result, and player 2 did not play — so only pair (3,4) is observed.
+        // 1 observed pair out of 6 schedulable = 16.7%, below the 30% threshold.
         let result = MatchResult {
             match_id: MatchId(1),
-            scores: {
-                let mut s = HashMap::new();
-                for i in 1..=4u32 {
-                    s.insert(PlayerId(i), PlayerMatchScore::scored(1));
-                }
-                s
-            },
+            scores: HashMap::from([
+                (PlayerId(1), PlayerMatchScore::scored(2)),
+                (PlayerId(2), PlayerMatchScore::did_not_play()),
+                (PlayerId(3), PlayerMatchScore::scored(1)),
+                (PlayerId(4), PlayerMatchScore::scored(1)),
+            ]),
             duration_multiplier: 1.0,
             entered_by: Role::Coach,
         };
-        let result_val = engine.compute(&players, &[&m], &[&result]);
+        let sched_refs: Vec<_> = sched.iter().collect();
+        let result_val = engine.compute(&players, &sched_refs, &[&result]);
         assert!(result_val.is_none());
     }
 
@@ -560,7 +615,18 @@ mod tests {
             entered_by: Role::Coach,
         };
 
-        let outcome = engine.compute(&players, &[&scheduled], &[&result]);
-        assert!(outcome.is_none(), "coverage should not count non-playing teammates");
+        // schedulable pairs = (1,2) and (3,4) = 2; observed = (3,4) only = 1; 50% ≥ 30%.
+        let mat = engine
+            .compute(&players, &[&scheduled], &[&result])
+            .expect("50% schedulable pair coverage should be sufficient");
+        assert_eq!(
+            mat.exposure(PlayerId(1), PlayerId(2)).unwrap(),
+            0.0,
+            "pair (1,2) should have zero exposure since player 2 did not play"
+        );
+        assert!(
+            (mat.exposure(PlayerId(3), PlayerId(4)).unwrap() - 1.0).abs() < 1e-10,
+            "pair (3,4) should have exposure of 1.0"
+        );
     }
 }

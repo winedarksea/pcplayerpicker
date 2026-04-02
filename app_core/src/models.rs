@@ -211,6 +211,27 @@ pub struct MatchResult {
     pub entered_by: Role,
 }
 
+pub const MIN_DURATION_MULTIPLIER: f64 = 0.5;
+pub const MAX_DURATION_MULTIPLIER: f64 = 1.5;
+
+pub fn clamp_duration_multiplier(duration_multiplier: f64) -> f64 {
+    if !duration_multiplier.is_finite() {
+        return 1.0;
+    }
+
+    duration_multiplier.clamp(MIN_DURATION_MULTIPLIER, MAX_DURATION_MULTIPLIER)
+}
+
+impl MatchResult {
+    pub fn normalized_duration_multiplier(&self) -> f64 {
+        clamp_duration_multiplier(self.duration_multiplier)
+    }
+
+    pub fn clamp_duration_multiplier_in_place(&mut self) {
+        self.duration_multiplier = self.normalized_duration_multiplier();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerMatchScore {
     /// None = did not play (default for all match slots).
@@ -289,5 +310,26 @@ impl SessionState {
 impl Default for RoundNumber {
     fn default() -> Self {
         RoundNumber(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_multiplier_is_clamped_to_supported_range() {
+        assert_eq!(clamp_duration_multiplier(0.1), MIN_DURATION_MULTIPLIER);
+        assert_eq!(clamp_duration_multiplier(0.5), 0.5);
+        assert_eq!(clamp_duration_multiplier(1.0), 1.0);
+        assert_eq!(clamp_duration_multiplier(1.5), 1.5);
+        assert_eq!(clamp_duration_multiplier(2.0), MAX_DURATION_MULTIPLIER);
+    }
+
+    #[test]
+    fn non_finite_duration_multiplier_defaults_to_full_match() {
+        assert_eq!(clamp_duration_multiplier(f64::NAN), 1.0);
+        assert_eq!(clamp_duration_multiplier(f64::INFINITY), 1.0);
+        assert_eq!(clamp_duration_multiplier(f64::NEG_INFINITY), 1.0);
     }
 }

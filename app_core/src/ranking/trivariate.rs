@@ -232,7 +232,7 @@ fn grad_hessian(
     let mut hess = DMatrix::zeros(dim, dim);
 
     for result in results {
-        let w = result.duration_multiplier;
+        let w = result.normalized_duration_multiplier();
 
         // Look up team assignments for this match
         let scheduled = match_lookup.get(&result.match_id);

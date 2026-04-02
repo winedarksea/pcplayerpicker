@@ -79,7 +79,7 @@ impl GoalModelEngine {
         let pace_factor = (reference_points / total_points.max(reference_points)).sqrt();
         let match_control_bonus = if own_team_goals > opponent_team_goals {
             MATCH_CONTROL_BONUS_WEIGHT
-                * ((own_team_goals + 1.0) / (opponent_team_goals + 1.0)).ln().max(0.0)
+                * ((own_team_goals + 1.0) / (opponent_team_goals + 1.0)).ln()
                 / own_team_size.max(1) as f64
         } else {
             0.0
@@ -166,7 +166,7 @@ impl GoalModelEngine {
 
         // Likelihood contributions from each player's goal count in each match
         for result in results {
-            let w = result.duration_multiplier;
+            let w = result.normalized_duration_multiplier();
             for (player_id, score) in &result.scores {
                 let raw_goals = match score.goals {
                     Some(g) => g as f64,

@@ -135,7 +135,9 @@ impl SessionManager {
                     MatchResult {
                         match_id: mid,
                         scores,
-                        duration_multiplier: raw.duration_multiplier,
+                        duration_multiplier: crate::models::clamp_duration_multiplier(
+                            raw.duration_multiplier,
+                        ),
                         entered_by: Role::Coach,
                     },
                 ));
@@ -210,6 +212,8 @@ impl SessionManager {
     }
 
     pub fn enter_score(&mut self, result: MatchResult, entered_by: Role) {
+        let mut result = result;
+        result.clamp_duration_multiplier_in_place();
         self.log.append(
             Event::ScoreEntered {
                 match_id: result.match_id,
@@ -221,6 +225,8 @@ impl SessionManager {
     }
 
     pub fn correct_score(&mut self, result: MatchResult) {
+        let mut result = result;
+        result.clamp_duration_multiplier_in_place();
         self.log.append(
             Event::ScoreCorrected {
                 match_id: result.match_id,

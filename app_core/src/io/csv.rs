@@ -2,7 +2,10 @@
 //!
 //! Supports RFC4180-style quoted fields, escaped quotes, and embedded newlines.
 
-use crate::models::{MatchId, MatchResult, Player, PlayerRanking, ScheduledMatch, SessionConfig};
+use crate::models::{
+    clamp_duration_multiplier, MatchId, MatchResult, Player, PlayerRanking, ScheduledMatch,
+    SessionConfig,
+};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -495,7 +498,7 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             team,
             player,
             goals,
-            duration,
+            duration: clamp_duration_multiplier(duration),
         });
     }
 
