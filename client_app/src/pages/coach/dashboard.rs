@@ -2029,7 +2029,7 @@ pub fn AnalysisTab() -> impl IntoView {
                                               border border-gray-700/50">
                                         "Estimated "
                                         <span class="text-white font-semibold">{r}" more rounds"</span>
-                                        " for confident rankings (±1 rank, 90%)"
+                                        " for high confidence rankings"
                                     </p>
                                 })}
 
