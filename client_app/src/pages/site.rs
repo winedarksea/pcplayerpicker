@@ -286,8 +286,8 @@ pub fn FaqPage() -> impl IntoView {
             "Yes. The Analysis tab has a Download Rankings CSV button. You can also import a previously saved CSV to overlay historical rankings in the Overall sub-tab.",
         ),
         (
-            "Is this only for 2v2 soccer?",
-            "No. 2v2 soccer is the default use case, but team size and sport are configurable so the app can extend to other formats such as 1v1 or larger small-sided games.",
+            "Can this be used for teams rather than individual players?",
+            "Yes. Instead of entering player names, you can enter team names and track just team performance, setting up in 1v1 format.",
         ),
         (
             "How accurate are the rankings and synergy scores?",
