@@ -1,10 +1,13 @@
 //! Primary Bayesian ranking engine.
 //!
-//! Model: each player has a latent log-skill θ_i. Goals scored by player i in
-//! match m follow a Negative Binomial distribution whose rate is modulated by
-//! team context (sum of teammate skills vs opponent skills). The posterior over
-//! all θ is approximated via warm-started Laplace (Newton-Raphson on the
-//! log-posterior), then used to derive rank distributions via Monte Carlo.
+//! Model: each player has a latent log-skill θ_i. Raw goals/points are first
+//! converted into a tempered scoring signal that soft-caps individual volume,
+//! downweights unusually high-tempo matches, and gives a small shared bonus for
+//! team control. That signal then follows a Negative Binomial likelihood whose
+//! rate is modulated by team context (sum of teammate skills vs opponent
+//! skills). The posterior over all θ is approximated via warm-started Laplace
+//! (Newton-Raphson on the log-posterior), then used to derive rank
+//! distributions via Monte Carlo.
 
 use super::RankingEngine;
 use crate::models::{
@@ -30,6 +33,11 @@ const GRAD_TOL: f64 = 1e-6;
 /// Context coupling weights used in the primary model.
 const TEAMMATE_CONTEXT_WEIGHT: f64 = 0.35;
 const OPPONENT_CONTEXT_WEIGHT: f64 = 0.35;
+
+/// Softens the contribution of raw point totals so the main ranking is less
+/// gameable in high-scoring environments. Aggressive/attack-style rankings can
+/// still expose raw scoring more directly elsewhere.
+const MATCH_CONTROL_BONUS_WEIGHT: f64 = 0.30;
 
 pub struct GoalModelEngine {
     /// NB dispersion parameter
@@ -58,6 +66,28 @@ struct Posterior {
 }
 
 impl GoalModelEngine {
+    fn tempered_scoring_signal(
+        raw_goals: f64,
+        own_team_goals: f64,
+        opponent_team_goals: f64,
+        players_in_match: usize,
+        own_team_size: usize,
+    ) -> f64 {
+        let softened_goals = raw_goals.ln_1p();
+        let total_points = own_team_goals + opponent_team_goals;
+        let reference_points = players_in_match.max(1) as f64;
+        let pace_factor = (reference_points / total_points.max(reference_points)).sqrt();
+        let match_control_bonus = if own_team_goals > opponent_team_goals {
+            MATCH_CONTROL_BONUS_WEIGHT
+                * ((own_team_goals + 1.0) / (opponent_team_goals + 1.0)).ln().max(0.0)
+                / own_team_size.max(1) as f64
+        } else {
+            0.0
+        };
+
+        pace_factor * (softened_goals + match_control_bonus)
+    }
+
     /// Fit the Laplace posterior given all completed, non-voided results.
     /// Returns None if there are no results yet (no update possible).
     fn fit(
@@ -138,7 +168,7 @@ impl GoalModelEngine {
         for result in results {
             let w = result.duration_multiplier;
             for (player_id, score) in &result.scores {
-                let goals = match score.goals {
+                let raw_goals = match score.goals {
                     Some(g) => g as f64,
                     None => continue, // did not play — exclude from likelihood
                 };
@@ -150,6 +180,7 @@ impl GoalModelEngine {
                 //   mu_i = sum_j coeff_j * theta_j
                 // where coeff_j includes player i plus teammate/opponent context.
                 let mut coeffs: Vec<(usize, f64)> = vec![(i, 1.0)];
+                let mut effective_goals = raw_goals.ln_1p();
 
                 if let Some(match_ctx) = matches_by_id.and_then(|m| m.get(&result.match_id)) {
                     let (teammates, opponents): (&[PlayerId], &[PlayerId]) =
@@ -174,6 +205,48 @@ impl GoalModelEngine {
                         coeffs.extend(peers.into_iter().map(|idx| (idx, each)));
                     };
 
+                    let own_team = teammates;
+                    let opponent_team = opponents;
+                    let own_team_goals: f64 = own_team
+                        .iter()
+                        .filter_map(|pid| result.scores.get(pid))
+                        .filter_map(|player_score| player_score.goals)
+                        .map(|goals| goals as f64)
+                        .sum();
+                    let opponent_team_goals: f64 = opponent_team
+                        .iter()
+                        .filter_map(|pid| result.scores.get(pid))
+                        .filter_map(|player_score| player_score.goals)
+                        .map(|goals| goals as f64)
+                        .sum();
+                    let own_team_size = own_team
+                        .iter()
+                        .filter(|pid| {
+                            result
+                                .scores
+                                .get(pid)
+                                .map(|player_score| player_score.played())
+                                .unwrap_or(false)
+                        })
+                        .count();
+                    let opponent_team_size = opponent_team
+                        .iter()
+                        .filter(|pid| {
+                            result
+                                .scores
+                                .get(pid)
+                                .map(|player_score| player_score.played())
+                                .unwrap_or(false)
+                        })
+                        .count();
+                    effective_goals = Self::tempered_scoring_signal(
+                        raw_goals,
+                        own_team_goals,
+                        opponent_team_goals,
+                        own_team_size + opponent_team_size,
+                        own_team_size,
+                    );
+
                     add_group(teammates, TEAMMATE_CONTEXT_WEIGHT);
                     add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
                 }
@@ -185,7 +258,7 @@ impl GoalModelEngine {
                 // NB(r, p): p = r/(r+lambda), E[goals] = lambda
                 // d/d(mu_i) log P(k | lambda) with lambda = exp(mu_i):
                 let r = self.dispersion;
-                let k = goals;
+                let k = effective_goals;
                 // d log L / d lambda = k/lambda - (r+k)/(r+lambda)
                 let dl_dlambda = k / lambda - (r + k) / (r + lambda);
                 // d lambda / d mu_i = lambda
@@ -637,5 +710,106 @@ mod tests {
         assert!(rankings
             .iter()
             .all(|ranking| ranking.rank_range_90 == (1, 5)));
+    }
+
+    #[test]
+    fn tempered_scoring_signal_downweights_high_scoring_close_matches() {
+        let low_total = GoalModelEngine::tempered_scoring_signal(5.0, 10.0, 8.0, 4, 2);
+        let high_total = GoalModelEngine::tempered_scoring_signal(10.0, 20.0, 16.0, 4, 2);
+        assert!(
+            high_total < low_total * 1.35,
+            "high-scoring close matches should not create proportionally larger evidence: low={low_total:.3}, high={high_total:.3}"
+        );
+    }
+
+    #[test]
+    fn tempered_scoring_signal_gives_small_credit_for_team_control() {
+        let scoreless_winner = GoalModelEngine::tempered_scoring_signal(0.0, 5.0, 0.0, 4, 2);
+        let scoreless_loser = GoalModelEngine::tempered_scoring_signal(0.0, 0.0, 5.0, 4, 2);
+        assert!(scoreless_winner > 0.0);
+        assert_eq!(scoreless_loser, 0.0);
+    }
+
+    #[test]
+    fn high_scoring_point_marathons_do_not_expand_rating_gaps_like_raw_counts() {
+        use std::collections::HashMap;
+
+        let engine = GoalModelEngine::default();
+        let config = make_config();
+        let players = vec![
+            make_player(1, "A"),
+            make_player(2, "B"),
+            make_player(3, "C"),
+            make_player(4, "D"),
+        ];
+        let scheduled_match = ScheduledMatch {
+            id: MatchId(1),
+            round: RoundNumber(1),
+            field: 1,
+            team_a: vec![PlayerId(1), PlayerId(2)],
+            team_b: vec![PlayerId(3), PlayerId(4)],
+            status: MatchStatus::Completed,
+        };
+        let matches_by_id = HashMap::from([(scheduled_match.id, scheduled_match)]);
+
+        let low_scoring_results: Vec<MatchResult> = (0..6)
+            .map(|_| MatchResult {
+                match_id: MatchId(1),
+                scores: HashMap::from([
+                    (PlayerId(1), PlayerMatchScore::scored(6)),
+                    (PlayerId(2), PlayerMatchScore::scored(5)),
+                    (PlayerId(3), PlayerMatchScore::scored(5)),
+                    (PlayerId(4), PlayerMatchScore::scored(4)),
+                ]),
+                duration_multiplier: 1.0,
+                entered_by: Role::Coach,
+            })
+            .collect();
+        let high_scoring_results: Vec<MatchResult> = (0..6)
+            .map(|_| MatchResult {
+                match_id: MatchId(1),
+                scores: HashMap::from([
+                    (PlayerId(1), PlayerMatchScore::scored(12)),
+                    (PlayerId(2), PlayerMatchScore::scored(10)),
+                    (PlayerId(3), PlayerMatchScore::scored(10)),
+                    (PlayerId(4), PlayerMatchScore::scored(8)),
+                ]),
+                duration_multiplier: 1.0,
+                entered_by: Role::Coach,
+            })
+            .collect();
+
+        let low_refs: Vec<_> = low_scoring_results.iter().collect();
+        let high_refs: Vec<_> = high_scoring_results.iter().collect();
+        let low_rankings =
+            engine.compute_ratings(&players, &low_refs, Some(&matches_by_id), &config);
+        let high_rankings =
+            engine.compute_ratings(&players, &high_refs, Some(&matches_by_id), &config);
+
+        let low_gap = low_rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap()
+            .rating
+            - low_rankings
+                .iter()
+                .find(|ranking| ranking.player_id == PlayerId(4))
+                .unwrap()
+                .rating;
+        let high_gap = high_rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap()
+            .rating
+            - high_rankings
+                .iter()
+                .find(|ranking| ranking.player_id == PlayerId(4))
+                .unwrap()
+                .rating;
+
+        assert!(
+            high_gap <= low_gap * 1.20,
+            "high-scoring marathons should not create much larger rating gaps: low={low_gap:.3}, high={high_gap:.3}"
+        );
     }
 }
