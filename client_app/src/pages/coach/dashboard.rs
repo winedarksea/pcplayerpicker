@@ -42,6 +42,21 @@ fn tab_class(active: bool) -> &'static str {
     }
 }
 
+fn compare_player_rankings_for_dashboard(
+    left: &app_core::models::PlayerRanking,
+    right: &app_core::models::PlayerRanking,
+) -> std::cmp::Ordering {
+    left.rank
+        .cmp(&right.rank)
+        .then_with(|| {
+            right
+                .rating
+                .partial_cmp(&left.rating)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .then_with(|| left.player_id.0.cmp(&right.player_id.0))
+}
+
 fn select_input_text_on_focus(ev: leptos::ev::FocusEvent) {
     let Some(target) = ev.target() else {
         return;
@@ -1505,7 +1520,7 @@ pub fn AnalysisTab() -> impl IntoView {
                                     }.into_any()
                                 } else {
                                     let mut sorted = rankings.clone();
-                                    sorted.sort_by_key(|r| r.rank);
+                                    sorted.sort_by(compare_player_rankings_for_dashboard);
                                     view! {
                                         <div class="space-y-4">
                                             <RankLane rankings=sorted.clone() player_map=player_map.clone()/>
@@ -1637,6 +1652,8 @@ pub fn AnalysisTab() -> impl IntoView {
                                             let csv_sorted: Vec<_> = rows.into_iter()
                                                 .map(|(_, r)| r)
                                                 .collect();
+                                            let mut csv_sorted = csv_sorted;
+                                            csv_sorted.sort_by(compare_player_rankings_for_dashboard);
                                             view! {
                                                 <div class="mt-3 space-y-3">
                                                     <p class="text-xs text-blue-400 font-medium">
