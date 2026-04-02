@@ -270,16 +270,8 @@ pub fn FaqPage() -> impl IntoView {
             "Going online means registering the session with the host server by clicking the 'Go Online' button. This enables features like recovery PINs and sharing session data by URL with Assistants and Players. Without clicking the go online button, the session data stays local to the coach device and won't be accessible from other devices or browsers. Going online is optional, other means of sharing a session are enabled, such as exporting csvs and copy-paste match schedules ready to share in group chat apps",
         ),
         (
-            "What data should assistants enter?",
-            "The primary input is goals scored per player per match. That is the main signal feeding the ranking engine. Did-not-play stays distinct from a real zero-goal game.",
-        ),
-        (
             "Can I remove an injured or unavailable player?",
             "Yes. Players can remain in the reports while being marked inactive so they stay out of future scheduling without erasing completed matches.",
-        ),
-        (
-            "Can I correct a bad result or wrong matchup?",
-            "Coach tools support swaps, voiding, and partial match duration handling because real sessions rarely stay perfectly clean.",
         ),
         (
             "Can I export rankings?",
@@ -299,7 +291,7 @@ pub fn FaqPage() -> impl IntoView {
         ),
         (
             "What is the recovery PIN for?",
-            "When you go online, you can set a short PIN on the session. If you switch devices or lose local data, entering the session ID and PIN pulls the full event log back from the server.",
+            "When you go online, you should set a short PIN on the session. If you switch devices or lose local data, entering the session ID and PIN pulls the full event log back from the server.",
         ),
         (
             "Can I self-host this?",
@@ -307,12 +299,17 @@ pub fn FaqPage() -> impl IntoView {
         ),
         (
             "My online session is seeing quota limits, how do I prevent this?",
-            "The current hosting plan has a maximum global pool of 100000 daily online session calls. That may sound like a lot, but with each schedule refresh from a player counting as a call, this can add up quickly. This should not stop usage of the main coach device. We recommend having a backup plan of sharing schedules over group chat apps. If you see this issue routinely, file an issue on GitHub (see below).",
+            "The current hosting plan has a maximum global pool of 100000 daily online session calls. That may sound like a lot, but with each schedule refresh from a player counting as a call, this can add up quickly. Quota limits should not stop usage of the main coach device. We recommend having a backup plan of sharing schedules over group chat apps. If you see this issue routinely, file an issue on GitHub (see below).",
         ),
         (
             "How do I report Bugs and Issues?",
             "You can report bugs and issues by opening an issue on the GitHub repository: https://github.com/winedarksea/pcplayerpicker/issues",
         ),
+    ];
+
+    let history_paragraphs = [
+        "PC Player Picker started as the idea of Mark Catlin back in 1990, who as a soccer coach wrote a number of books (The Art of Soccer, Good N' Fun Soccer, and 'Understanding Soccer' under the pseudonym Kram Niltac). He commissioned a simple MS-DOS program from a local developer to create schedules and rank players, Player Picker for PC. Simpler than the current version, the basic idea was the same, to use 2 on 2 soccer as a more focused way to test players and get a quantitative basis for skills evaluation.",
+        "Since no one uses floppy disks anymore, I wrote this updated version as a birthday present for Mark Catlin (my father). The goal remains the same now, to be an effective yet simple tool for evaluating players, now powered by Bayesian statistics and the Rust programming language. This active learning approach (adjusting schedules based on results) also makes it useful for running tournaments, the idea being a pickleball league can do an informal tournament, just playing as many games as they want in an evening without a full bracket, and the skills pairings should mean most matches are closer, more exciting matches.",
     ];
 
     view! {
@@ -347,6 +344,15 @@ pub fn FaqPage() -> impl IntoView {
                             </a>
                             "."
                         </p>
+                    </div>
+
+                    <div class="rounded-[24px] border border-amber-300/20 bg-gradient-to-br from-amber-300/10 to-slate-900/70 p-6">
+                        <h2 class="text-xl font-bold text-white">"Project History and Motivation"</h2>
+                        <div class="mt-3 space-y-4">
+                            {history_paragraphs.into_iter().map(|paragraph| view! {
+                                <p class="leading-7 text-slate-200">{paragraph}</p>
+                            }).collect_view()}
+                        </div>
                     </div>
                 </div>
             </section>
