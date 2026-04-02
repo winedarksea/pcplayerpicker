@@ -66,6 +66,33 @@ struct Posterior {
 }
 
 impl GoalModelEngine {
+    fn append_weighted_group_coefficients(
+        coeffs: &mut Vec<(usize, f64)>,
+        group: &[PlayerId],
+        player_index: &HashMap<PlayerId, usize>,
+        exclude_player_id: Option<PlayerId>,
+        total_weight: f64,
+        result: Option<&MatchResult>,
+    ) {
+        let peers: Vec<usize> = group
+            .iter()
+            .filter(|&&player_id| Some(player_id) != exclude_player_id)
+            .filter(|&&player_id| {
+                result.is_none_or(|match_result| match_result.player_played(&player_id))
+            })
+            .filter_map(|player_id| player_index.get(player_id).copied())
+            .collect();
+        if peers.is_empty() {
+            return;
+        }
+        let weight_per_peer = total_weight / peers.len() as f64;
+        coeffs.extend(
+            peers
+                .into_iter()
+                .map(|player_idx| (player_idx, weight_per_peer)),
+        );
+    }
+
     /// Fit the Laplace posterior given all completed, non-voided results.
     /// Returns None if there are no results yet (no update possible).
     fn fit(
@@ -153,56 +180,46 @@ impl GoalModelEngine {
 
             match &result.score_payload {
                 // ── Win / Draw / Lose ────────────────────────────────────────
-                MatchScorePayload::WinDrawLose { .. } => {
+                MatchScorePayload::WinDrawLose { outcome } => {
                     let Some(match_ctx) = match_ctx else { continue };
-                    for (player_id, participation_status) in &result.participation_by_player {
-                        if !participation_status.played() {
-                            continue;
-                        }
-                        let Some(&i) = player_index.get(player_id) else {
-                            continue;
-                        };
+                    let mut coeffs: Vec<(usize, f64)> = Vec::new();
+                    Self::append_weighted_group_coefficients(
+                        &mut coeffs,
+                        &match_ctx.team_a,
+                        player_index,
+                        None,
+                        1.0,
+                        Some(result),
+                    );
+                    Self::append_weighted_group_coefficients(
+                        &mut coeffs,
+                        &match_ctx.team_b,
+                        player_index,
+                        None,
+                        -1.0,
+                        Some(result),
+                    );
+                    if coeffs.is_empty() {
+                        continue;
+                    }
 
-                        let mut coeffs: Vec<(usize, f64)> = vec![(i, 1.0)];
-                        let (teammates, opponents): (&[PlayerId], &[PlayerId]) =
-                            if match_ctx.team_a.contains(player_id) {
-                                (&match_ctx.team_a, &match_ctx.team_b)
-                            } else if match_ctx.team_b.contains(player_id) {
-                                (&match_ctx.team_b, &match_ctx.team_a)
-                            } else {
-                                (&[], &[])
-                            };
-                        let mut add_group = |group: &[PlayerId], total_weight: f64| {
-                            let peers: Vec<usize> = group
-                                .iter()
-                                .filter(|&&pid| pid != *player_id)
-                                .filter_map(|pid| player_index.get(pid).copied())
-                                .collect();
-                            if peers.is_empty() {
-                                return;
-                            }
-                            let each = total_weight / peers.len() as f64;
-                            coeffs.extend(peers.into_iter().map(|idx| (idx, each)));
-                        };
-                        add_group(teammates, TEAMMATE_CONTEXT_WEIGHT);
-                        add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
-
-                        let mu_i: f64 = coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
-                        let Some(observed_outcome) =
-                            result.team_outcome_value_for_player(player_id, match_ctx)
-                        else {
-                            continue;
-                        };
-                        let win_prob = 1.0 / (1.0 + (-mu_i).exp());
-                        let dl_dmu = observed_outcome - win_prob;
-                        let d2l_dmu2 = -win_prob * (1.0 - win_prob);
-                        for (j, c_j) in &coeffs {
-                            grad[*j] += w * dl_dmu * *c_j;
-                        }
-                        for (j, c_j) in &coeffs {
-                            for (k_idx, c_k) in &coeffs {
-                                hess[(*j, *k_idx)] += w * d2l_dmu2 * *c_j * *c_k;
-                            }
+                    let mu_linear: f64 =
+                        coeffs.iter().map(|(idx, coeff)| theta[*idx] * *coeff).sum();
+                    let observed_outcome = match outcome {
+                        crate::models::MatchOutcome::TeamAWin => 1.0,
+                        crate::models::MatchOutcome::Draw => 0.5,
+                        crate::models::MatchOutcome::TeamBWin => 0.0,
+                    };
+                    let win_prob = 1.0 / (1.0 + (-mu_linear).exp());
+                    let dl_dmu = observed_outcome - win_prob;
+                    let d2l_dmu2 = -win_prob * (1.0 - win_prob);
+                    for (player_idx, coeff) in &coeffs {
+                        grad[*player_idx] += w * dl_dmu * *coeff;
+                    }
+                    for (left_idx, left_coeff) in &coeffs {
+                        for (right_idx, right_coeff) in &coeffs {
+                            hess[(*left_idx, *right_idx)] +=
+                                w * d2l_dmu2 * *left_coeff * *right_coeff;
                         }
                     }
                 }
@@ -227,22 +244,40 @@ impl GoalModelEngine {
                             continue;
                         }
 
-                        let mu_linear: f64 = team_indices.iter().map(|&i| theta[i]).sum();
-                        let lambda = mu_linear.exp();
+                        let mut coeffs: Vec<(usize, f64)> =
+                            team_indices.iter().copied().map(|idx| (idx, 1.0)).collect();
+                        let opposing_team = if std::ptr::eq(team, &match_ctx.team_a) {
+                            &match_ctx.team_b
+                        } else {
+                            &match_ctx.team_a
+                        };
+                        Self::append_weighted_group_coefficients(
+                            &mut coeffs,
+                            opposing_team,
+                            player_index,
+                            None,
+                            -OPPONENT_CONTEXT_WEIGHT,
+                            Some(result),
+                        );
+
+                        let mu_linear: f64 =
+                            coeffs.iter().map(|(idx, coeff)| theta[*idx] * *coeff).sum();
+                        let lambda = mu_linear.exp() * w;
                         let k = k_raw as f64;
                         let r = self.dispersion;
 
                         let dl_dlambda = k / lambda - (r + k) / (r + lambda);
                         let dl_dmu = dl_dlambda * lambda;
-                        for &i in &team_indices {
-                            grad[i] += w * dl_dmu;
+                        for (player_idx, coeff) in &coeffs {
+                            grad[*player_idx] += dl_dmu * *coeff;
                         }
 
                         let d2l_dlambda2 = -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
                         let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
-                        for &i in &team_indices {
-                            for &j in &team_indices {
-                                hess[(i, j)] += w * d2l_dmu2;
+                        for (left_idx, left_coeff) in &coeffs {
+                            for (right_idx, right_coeff) in &coeffs {
+                                hess[(*left_idx, *right_idx)] +=
+                                    d2l_dmu2 * *left_coeff * *right_coeff;
                             }
                         }
                     }
@@ -273,38 +308,40 @@ impl GoalModelEngine {
                                 } else {
                                     (&[], &[])
                                 };
-                            let mut add_group = |group: &[PlayerId], total_weight: f64| {
-                                let peers: Vec<usize> = group
-                                    .iter()
-                                    .filter(|&&pid| pid != *player_id)
-                                    .filter_map(|pid| player_index.get(pid).copied())
-                                    .collect();
-                                if peers.is_empty() {
-                                    return;
-                                }
-                                let each = total_weight / peers.len() as f64;
-                                coeffs.extend(peers.into_iter().map(|idx| (idx, each)));
-                            };
-                            add_group(teammates, TEAMMATE_CONTEXT_WEIGHT);
-                            add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
+                            Self::append_weighted_group_coefficients(
+                                &mut coeffs,
+                                teammates,
+                                player_index,
+                                Some(*player_id),
+                                TEAMMATE_CONTEXT_WEIGHT,
+                                Some(result),
+                            );
+                            Self::append_weighted_group_coefficients(
+                                &mut coeffs,
+                                opponents,
+                                player_index,
+                                Some(*player_id),
+                                -OPPONENT_CONTEXT_WEIGHT,
+                                Some(result),
+                            );
                         }
 
                         let mu_linear: f64 = coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
 
-                        let lambda = mu_linear.exp();
+                        let lambda = mu_linear.exp() * w;
                         let r = self.dispersion;
 
                         let dl_dlambda = k / lambda - (r + k) / (r + lambda);
                         let dl_dmu = dl_dlambda * lambda;
                         for (j, c_j) in &coeffs {
-                            grad[*j] += w * dl_dmu * *c_j;
+                            grad[*j] += dl_dmu * *c_j;
                         }
 
                         let d2l_dlambda2 = -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
                         let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
                         for (j, c_j) in &coeffs {
                             for (k_idx, c_k) in &coeffs {
-                                hess[(*j, *k_idx)] += w * d2l_dmu2 * *c_j * *c_k;
+                                hess[(*j, *k_idx)] += d2l_dmu2 * *c_j * *c_k;
                             }
                         }
                     }
@@ -620,6 +657,10 @@ mod tests {
         SessionConfig::new(2, 1, Sport::Soccer)
     }
 
+    fn make_config_with_team_size(team_size: u8) -> SessionConfig {
+        SessionConfig::new(team_size, 1, Sport::Soccer)
+    }
+
     fn legacy_result(match_id: u32, scores: Vec<(u32, u16)>) -> MatchResult {
         MatchResult::from_legacy_player_scores(
             MatchId(match_id),
@@ -628,6 +669,43 @@ mod tests {
                 .map(|(player_id, points)| (PlayerId(player_id), PlayerMatchScore::scored(points)))
                 .collect(),
             1.0,
+            Role::Coach,
+        )
+    }
+
+    fn win_draw_lose_result(
+        match_id: u32,
+        player_ids: &[u32],
+        outcome: MatchOutcome,
+        duration_multiplier: f64,
+    ) -> MatchResult {
+        MatchResult::new_win_draw_lose(
+            MatchId(match_id),
+            played_statuses(player_ids),
+            outcome,
+            duration_multiplier,
+            Role::Coach,
+        )
+    }
+
+    fn points_per_player_result(
+        match_id: u32,
+        scores: Vec<(u32, u16)>,
+        duration_multiplier: f64,
+    ) -> MatchResult {
+        MatchResult::new_points_per_player(
+            MatchId(match_id),
+            played_statuses(
+                &scores
+                    .iter()
+                    .map(|(player_id, _)| *player_id)
+                    .collect::<Vec<_>>(),
+            ),
+            scores
+                .into_iter()
+                .map(|(player_id, points)| (PlayerId(player_id), points))
+                .collect(),
+            duration_multiplier,
             Role::Coach,
         )
     }
@@ -840,6 +918,203 @@ mod tests {
             "points-per-player payload should still use the count likelihood when config mode differs: scorer={:.3}, defender={:.3}",
             scorer.rating,
             defender.rating
+        );
+    }
+
+    #[test]
+    fn win_draw_lose_team_level_updates_keep_2v2_more_uncertain_than_1v1() {
+        let engine = GoalModelEngine::default();
+
+        let one_v_one_players = vec![make_player(1, "A"), make_player(2, "B")];
+        let one_v_one_matches: HashMap<MatchId, ScheduledMatch> = (0..6)
+            .map(|match_id| {
+                let scheduled_match = scheduled_match(match_id, vec![1], vec![2]);
+                (scheduled_match.id, scheduled_match)
+            })
+            .collect();
+        let one_v_one_results: Vec<MatchResult> = (0..6)
+            .map(|match_id| win_draw_lose_result(match_id, &[1, 2], MatchOutcome::TeamAWin, 1.0))
+            .collect();
+        let one_v_one_result_refs: Vec<&MatchResult> = one_v_one_results.iter().collect();
+        let one_v_one_rankings = engine.compute_ratings(
+            &one_v_one_players,
+            &one_v_one_result_refs,
+            Some(&one_v_one_matches),
+            &make_config_with_team_size(1),
+        );
+        let one_v_one_winner_uncertainty = one_v_one_rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap()
+            .uncertainty;
+
+        let two_v_two_players = vec![
+            make_player(1, "A1"),
+            make_player(2, "A2"),
+            make_player(3, "B1"),
+            make_player(4, "B2"),
+        ];
+        let two_v_two_matches: HashMap<MatchId, ScheduledMatch> = (100..106)
+            .map(|match_id| {
+                let scheduled_match = scheduled_match(match_id, vec![1, 2], vec![3, 4]);
+                (scheduled_match.id, scheduled_match)
+            })
+            .collect();
+        let two_v_two_results: Vec<MatchResult> = (100..106)
+            .map(|match_id| {
+                win_draw_lose_result(match_id, &[1, 2, 3, 4], MatchOutcome::TeamAWin, 1.0)
+            })
+            .collect();
+        let two_v_two_result_refs: Vec<&MatchResult> = two_v_two_results.iter().collect();
+        let two_v_two_rankings = engine.compute_ratings(
+            &two_v_two_players,
+            &two_v_two_result_refs,
+            Some(&two_v_two_matches),
+            &make_config(),
+        );
+        let two_v_two_winner_uncertainty = two_v_two_rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap()
+            .uncertainty;
+
+        assert!(
+            two_v_two_winner_uncertainty > one_v_one_winner_uncertainty,
+            "shared 2v2 outcomes should leave each player less certain than independent 1v1 outcomes: 2v2={two_v_two_winner_uncertainty:.3}, 1v1={one_v_one_winner_uncertainty:.3}"
+        );
+    }
+
+    #[test]
+    fn points_per_team_opponent_context_rewards_scoring_against_stronger_opponents() {
+        let engine = GoalModelEngine::default();
+        let config = make_config_with_team_size(1);
+        let players = vec![
+            make_player(1, "FinisherVsStrongOpponent"),
+            make_player(2, "StrongOpponent"),
+            make_player(3, "FinisherVsWeakOpponent"),
+            make_player(4, "WeakOpponent"),
+            make_player(5, "Anchor"),
+        ];
+
+        let scheduled_matches = vec![
+            scheduled_match(1, vec![2], vec![5]),
+            scheduled_match(2, vec![1], vec![2]),
+            scheduled_match(3, vec![4], vec![5]),
+            scheduled_match(4, vec![3], vec![4]),
+        ];
+        let matches_by_id: HashMap<MatchId, ScheduledMatch> = scheduled_matches
+            .into_iter()
+            .map(|scheduled_match| (scheduled_match.id, scheduled_match))
+            .collect();
+
+        let mut results = Vec::new();
+        for _ in 0..6 {
+            results.push(MatchResult::new_points_per_team(
+                MatchId(1),
+                played_statuses(&[2, 5]),
+                8,
+                0,
+                1.0,
+                Role::Coach,
+            ));
+            results.push(MatchResult::new_points_per_team(
+                MatchId(2),
+                played_statuses(&[1, 2]),
+                2,
+                0,
+                1.0,
+                Role::Coach,
+            ));
+            results.push(MatchResult::new_points_per_team(
+                MatchId(3),
+                played_statuses(&[4, 5]),
+                1,
+                0,
+                1.0,
+                Role::Coach,
+            ));
+            results.push(MatchResult::new_points_per_team(
+                MatchId(4),
+                played_statuses(&[3, 4]),
+                2,
+                0,
+                1.0,
+                Role::Coach,
+            ));
+        }
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+        let rankings =
+            engine.compute_ratings(&players, &result_refs, Some(&matches_by_id), &config);
+
+        let stronger_opponent_finisher_rating = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap()
+            .rating;
+        let weaker_opponent_finisher_rating = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(3))
+            .unwrap()
+            .rating;
+
+        assert!(
+            stronger_opponent_finisher_rating > weaker_opponent_finisher_rating,
+            "scoring the same amount against a stronger opponent should rate higher: strong_opp={stronger_opponent_finisher_rating:.3}, weak_opp={weaker_opponent_finisher_rating:.3}"
+        );
+    }
+
+    #[test]
+    fn half_duration_scoring_rate_matches_full_duration_when_using_exposure() {
+        let engine = GoalModelEngine::default();
+        let config = make_config_with_team_size(1);
+        let players = vec![
+            make_player(1, "FullMatchScorer"),
+            make_player(2, "HalfMatchScorer"),
+            make_player(3, "SharedOpponent"),
+        ];
+
+        let scheduled_matches = (0..6)
+            .map(|match_id| scheduled_match(match_id + 1, vec![1], vec![3]))
+            .chain((0..6).map(|match_id| scheduled_match(match_id + 101, vec![2], vec![3])))
+            .collect::<Vec<_>>();
+        let matches_by_id: HashMap<MatchId, ScheduledMatch> = scheduled_matches
+            .into_iter()
+            .map(|scheduled_match| (scheduled_match.id, scheduled_match))
+            .collect();
+
+        let mut results = Vec::new();
+        for match_id in 1..=6 {
+            results.push(points_per_player_result(
+                match_id,
+                vec![(1, 2), (3, 0)],
+                1.0,
+            ));
+        }
+        for match_id in 101..=106 {
+            results.push(points_per_player_result(
+                match_id,
+                vec![(2, 1), (3, 0)],
+                0.5,
+            ));
+        }
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+        let rankings =
+            engine.compute_ratings(&players, &result_refs, Some(&matches_by_id), &config);
+
+        let full_match_rating = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap()
+            .rating;
+        let half_match_rating = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(2))
+            .unwrap()
+            .rating;
+
+        assert!(
+            (full_match_rating - half_match_rating).abs() < 0.15,
+            "equal scoring rates at different durations should stay close when duration is exposure: full={full_match_rating:.3}, half={half_match_rating:.3}"
         );
     }
 }
