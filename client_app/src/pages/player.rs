@@ -12,7 +12,7 @@ use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_o
 use crate::read_only_sync::should_run_debounced_activation_refresh;
 use crate::sync::{auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, EventLog};
-use app_core::models::{MatchStatus, PlayerId, PlayerStatus};
+use app_core::models::{MatchStatus, PlayerId, PlayerStatus, MatchResult};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use wasm_bindgen::prelude::Closure;
@@ -148,6 +148,7 @@ pub fn PlayerPage() -> impl IntoView {
     // Player selection
     let selected_player: RwSignal<Option<PlayerId>> = RwSignal::new(None);
     let resolved_token = RwSignal::new(String::new());
+    let show_past = RwSignal::new(false);
 
     // PIN gate signals
     let requires_pin = RwSignal::new(false);
@@ -565,6 +566,160 @@ pub fn PlayerPage() -> impl IntoView {
                                     }
                                 }).collect_view().into_any()
                             }}
+
+                            // Past results — collapsible, zero extra server calls.
+                            {
+                                // Collect completed matches this player was in,
+                                // sorted newest round first.
+                                let mut past: Vec<_> = state
+                                    .matches
+                                    .values()
+                                    .filter(|m| {
+                                        m.status == MatchStatus::Completed
+                                            && (m.team_a.contains(&selected_id)
+                                                || m.team_b.contains(&selected_id))
+                                    })
+                                    .collect();
+
+                                if past.is_empty() {
+                                    view! {}.into_any()
+                                } else {
+                                    past.sort_by(|a, b| {
+                                        b.round.0.cmp(&a.round.0).then(a.field.cmp(&b.field))
+                                    });
+                                    let past_count = past.len();
+                                    let is_open = show_past.get();
+
+                                    // Eagerly build card data so no borrows escape into the view.
+                                    struct PastCard {
+                                        rnd: u32,
+                                        field: u8,
+                                        my_score: u16,
+                                        opp_score: u16,
+                                        my_names: Vec<String>,
+                                        opp_names: Vec<String>,
+                                        my_goals: Option<u16>,
+                                    }
+
+                                    let cards: Vec<PastCard> = past
+                                        .into_iter()
+                                        .filter_map(|m| {
+                                            let result: MatchResult =
+                                                state.results.get(&m.id).cloned()?;
+                                            let on_team_a = m.team_a.contains(&selected_id);
+                                            let my_side =
+                                                if on_team_a { &m.team_a } else { &m.team_b };
+                                            let opp_side =
+                                                if on_team_a { &m.team_b } else { &m.team_a };
+                                            let my_score: u16 = my_side
+                                                .iter()
+                                                .filter_map(|id| {
+                                                    result.scores.get(id).and_then(|s| s.goals)
+                                                })
+                                                .sum();
+                                            let opp_score: u16 = opp_side
+                                                .iter()
+                                                .filter_map(|id| {
+                                                    result.scores.get(id).and_then(|s| s.goals)
+                                                })
+                                                .sum();
+                                            let my_names: Vec<_> = my_side
+                                                .iter()
+                                                .filter_map(|id| {
+                                                    state.players.get(id).map(|p| p.name.clone())
+                                                })
+                                                .collect();
+                                            let opp_names: Vec<_> = opp_side
+                                                .iter()
+                                                .filter_map(|id| {
+                                                    state.players.get(id).map(|p| p.name.clone())
+                                                })
+                                                .collect();
+                                            let my_goals = result
+                                                .scores
+                                                .get(&selected_id)
+                                                .and_then(|s| s.goals);
+                                            Some(PastCard {
+                                                rnd: m.round.0,
+                                                field: m.field,
+                                                my_score,
+                                                opp_score,
+                                                my_names,
+                                                opp_names,
+                                                my_goals,
+                                            })
+                                        })
+                                        .collect();
+
+                                    view! {
+                                        <div class="border-t border-gray-700/40 pt-2 mt-1">
+                                            <button
+                                                class="w-full py-2 text-sm text-gray-400 \
+                                                       hover:text-gray-200 flex items-center \
+                                                       justify-center gap-1.5 transition-colors"
+                                                on:click=move |_| show_past.update(|v| *v = !*v)
+                                            >
+                                                {if is_open {
+                                                    format!("▲ Hide past results ({past_count} matches)")
+                                                } else {
+                                                    format!("▼ Past results ({past_count} matches)")
+                                                }}
+                                            </button>
+                                            {is_open.then(|| {
+                                                cards.into_iter().map(|c| {
+                                                    view! {
+                                                        <div class="bg-gray-900 border \
+                                                                    border-gray-700/50 \
+                                                                    rounded-2xl p-4 mt-2">
+                                                            <div class="flex items-center \
+                                                                        justify-between mb-3">
+                                                                <div>
+                                                                    <span class="text-xs font-semibold \
+                                                                                 uppercase tracking-widest \
+                                                                                 text-gray-500">
+                                                                        "Round "{c.rnd}
+                                                                    </span>
+                                                                    <span class="ml-3 text-xs text-gray-500">
+                                                                        "Field "{c.field}
+                                                                    </span>
+                                                                </div>
+                                                                <span class="text-sm font-bold text-white tabular-nums">
+                                                                    {c.my_score}" – "{c.opp_score}
+                                                                </span>
+                                                            </div>
+                                                            <div class="flex items-center gap-4">
+                                                                <div class="flex-1 text-center \
+                                                                            ring-1 ring-blue-500/40 \
+                                                                            rounded-lg py-1">
+                                                                    {c.my_names.into_iter().map(|n| view! {
+                                                                        <p class="text-sm font-semibold text-white">{n}</p>
+                                                                    }).collect_view()}
+                                                                </div>
+                                                                <div class="shrink-0 text-center">
+                                                                    <span class="text-gray-500 font-black text-sm">
+                                                                        "VS"
+                                                                    </span>
+                                                                </div>
+                                                                <div class="flex-1 text-center">
+                                                                    {c.opp_names.into_iter().map(|n| view! {
+                                                                        <p class="text-sm text-gray-300">{n}</p>
+                                                                    }).collect_view()}
+                                                                </div>
+                                                            </div>
+                                                            {c.my_goals.map(|g| view! {
+                                                                <p class="mt-2 text-xs text-gray-500 \
+                                                                          text-center">
+                                                                    "Your goals: "{g}
+                                                                </p>
+                                                            })}
+                                                        </div>
+                                                    }
+                                                }).collect_view()
+                                            })}
+                                        </div>
+                                    }.into_any()
+                                }
+                            }
                         </div>
                     }.into_any()
                 }}

@@ -539,6 +539,70 @@ const DURATION_OPTIONS: &[(f64, &str)] = &[
     (1.5, "1½×"),
 ];
 
+/// Read-only summary card for a completed match result.
+#[component]
+fn MatchResultSummaryCard(
+    field: u8,
+    round: u32,
+    team_a: Vec<PlayerId>,
+    team_b: Vec<PlayerId>,
+    player_names: HashMap<PlayerId, String>,
+    result: MatchResult,
+) -> impl IntoView {
+    let score_a: u16 = team_a
+        .iter()
+        .filter_map(|id| result.scores.get(id).and_then(|s| s.goals))
+        .sum();
+    let score_b: u16 = team_b
+        .iter()
+        .filter_map(|id| result.scores.get(id).and_then(|s| s.goals))
+        .sum();
+    let all_ids: Vec<PlayerId> = team_a.iter().chain(team_b.iter()).cloned().collect();
+    let show_duration = (result.duration_multiplier - 1.0).abs() > 0.01;
+    let duration_pct = (result.duration_multiplier * 100.0).round() as u32;
+
+    view! {
+        <div class="bg-gray-900 border border-gray-700/50 rounded-xl overflow-hidden">
+            <div class="px-4 pt-3 pb-2 border-b border-gray-700/30 flex items-center justify-between">
+                <span class="text-sm font-semibold text-white">
+                    "Field "{field}" · Rd "{round}
+                </span>
+                <span class="text-xs font-bold text-gray-200">
+                    {score_a}" – "{score_b}
+                </span>
+            </div>
+            <div class="px-4 py-3 space-y-1.5">
+                {all_ids.iter().map(|&pid| {
+                    let name = player_names.get(&pid).cloned()
+                        .unwrap_or_else(|| format!("Player {}", pid.0));
+                    let on_team_a = team_a.contains(&pid);
+                    let goals = result.scores.get(&pid).and_then(|s| s.goals);
+                    view! {
+                        <div class="flex items-center gap-2">
+                            <span class=move || format!(
+                                "w-2 h-2 rounded-full shrink-0 {}",
+                                if on_team_a { "bg-blue-400" } else { "bg-orange-400" }
+                            )/>
+                            <span class="flex-1 text-sm text-white truncate">{name}</span>
+                            <span class="text-sm text-gray-400 font-medium tabular-nums">
+                                {match goals {
+                                    None => "DNP".to_string(),
+                                    Some(g) => g.to_string(),
+                                }}
+                            </span>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+            {show_duration.then(|| view! {
+                <div class="px-4 pb-2 text-xs text-gray-500">
+                    "Duration: "{duration_pct}"%"
+                </div>
+            })}
+        </div>
+    }
+}
+
 #[component]
 fn MatchScoreCard(
     match_id: MatchId,
@@ -697,6 +761,7 @@ fn MatchScoreCard(
 #[component]
 pub fn ResultsTab() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext missing");
+    let show_history = RwSignal::new(false);
 
     let on_score_submit = {
         let ctx = ctx.clone();
@@ -809,6 +874,91 @@ pub fn ResultsTab() -> impl IntoView {
                         </div>
                     }.into_any()
                 }
+            }}
+
+            // Past rounds — collapsible read-only history.
+            {move || {
+                let session_opt = ctx.session.get();
+                let manager = match session_opt.as_ref() {
+                    Some(m) => m,
+                    None => return view! {}.into_any(),
+                };
+
+                let round = manager.state.current_round.0;
+                if round <= 1 {
+                    return view! {}.into_any();
+                }
+
+                let player_names: HashMap<_, _> = manager
+                    .state
+                    .players
+                    .iter()
+                    .map(|(id, p)| (*id, p.name.clone()))
+                    .collect();
+
+                let mut past: Vec<_> = manager
+                    .state
+                    .matches
+                    .values()
+                    .filter(|m| m.status == MatchStatus::Completed && m.round.0 < round)
+                    .collect();
+
+                if past.is_empty() {
+                    return view! {}.into_any();
+                }
+
+                past.sort_by(|a, b| a.round.0.cmp(&b.round.0).then(a.field.cmp(&b.field)));
+                let past_count = past.len();
+                let is_open = show_history.get();
+
+                // Collect round numbers in ascending order.
+                let mut round_nums: Vec<u32> = past.iter().map(|m| m.round.0).collect();
+                round_nums.dedup();
+
+                view! {
+                    <div class="border-t border-gray-700/40 pt-2">
+                        <button
+                            class="w-full py-2 text-sm text-gray-400 hover:text-gray-200 \
+                                   flex items-center justify-center gap-1.5 transition-colors"
+                            on:click=move |_| show_history.update(|v| *v = !*v)
+                        >
+                            {if is_open {
+                                format!("▲ Hide past rounds ({past_count} matches)")
+                            } else {
+                                format!("▼ Past rounds ({past_count} matches)")
+                            }}
+                        </button>
+                        {is_open.then(|| {
+                            round_nums.into_iter().map(|rnd| {
+                                let round_matches: Vec<_> = past
+                                    .iter()
+                                    .filter(|m| m.round.0 == rnd)
+                                    .collect();
+                                let cards = round_matches.into_iter().filter_map(|m| {
+                                    let result = manager.state.results.get(&m.id).cloned()?;
+                                    let pnames = player_names.clone();
+                                    Some(view! {
+                                        <MatchResultSummaryCard
+                                            field=m.field
+                                            round=m.round.0
+                                            team_a=m.team_a.clone()
+                                            team_b=m.team_b.clone()
+                                            player_names=pnames
+                                            result=result
+                                        />
+                                    })
+                                }).collect_view();
+                                view! {
+                                    <div class="space-y-2 mt-3">
+                                        <h3 class="text-xs font-semibold uppercase tracking-widest \
+                                                   text-gray-500">"Round "{rnd}</h3>
+                                        {cards}
+                                    </div>
+                                }
+                            }).collect_view()
+                        })}
+                    </div>
+                }.into_any()
             }}
 
             // Download all completed results as CSV (visible once any results exist).
