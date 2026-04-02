@@ -52,6 +52,28 @@ fn select_input_text_on_focus(ev: leptos::ev::FocusEvent) {
     input.select();
 }
 
+fn validate_new_player_name(
+    raw_name: &str,
+    existing_players: &HashMap<PlayerId, app_core::models::Player>,
+) -> Result<String, String> {
+    let trimmed_name = raw_name.trim();
+    if trimmed_name.is_empty() {
+        return Err("Enter a player name.".to_string());
+    }
+
+    let duplicate_exists = existing_players.values().any(|player| {
+        player
+            .name
+            .trim()
+            .eq_ignore_ascii_case(trimmed_name)
+    });
+    if duplicate_exists {
+        return Err("That player name is already in this session.".to_string());
+    }
+
+    Ok(trimmed_name.to_string())
+}
+
 // ── Dashboard page (parent + tab router) ─────────────────────────────────────
 
 #[component]
@@ -1925,6 +1947,44 @@ fn RankLane(
 #[component]
 pub fn PlayersTab() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext missing");
+    let new_player_name = RwSignal::new(String::new());
+    let add_player_error = RwSignal::new(String::new());
+
+    let on_add_player = {
+        let ctx = ctx.clone();
+        move || {
+            let raw_name = new_player_name.get_untracked();
+
+            let validated_name = match ctx.session.with_untracked(|opt| {
+                opt.as_ref().map(|manager| {
+                    validate_new_player_name(&raw_name, &manager.state.players)
+                })
+            }) {
+                Some(Ok(valid_name)) => valid_name,
+                Some(Err(error_message)) => {
+                    add_player_error.set(error_message);
+                    return;
+                }
+                None => {
+                    add_player_error.set("Session not loaded yet.".to_string());
+                    return;
+                }
+            };
+
+            ctx.session.update(|opt| {
+                if let Some(manager) = opt {
+                    manager.add_player(validated_name.clone());
+                }
+            });
+            ctx.session.with(|s| {
+                if let Some(m) = s {
+                    save_session(m);
+                }
+            });
+            new_player_name.set(String::new());
+            add_player_error.set(String::new());
+        }
+    };
 
     let on_toggle = {
         let ctx = ctx.clone();
@@ -1974,6 +2034,53 @@ pub fn PlayersTab() -> impl IntoView {
                             "Deactivating a player removes them from future scheduling "
                             "but keeps their match history."
                         </p>
+                        <div class="content-auto-card bg-gray-900 border border-gray-700/50 rounded-xl px-4 py-4 space-y-3">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <p class="font-medium text-sm text-white">"Add Player"</p>
+                                    <p class="text-xs text-gray-500 mt-0.5">
+                                        "New players join starting this round and become available for future scheduling."
+                                    </p>
+                                </div>
+                                <span class="text-[11px] uppercase tracking-wide text-blue-300 bg-blue-950/40 border border-blue-500/30 rounded-full px-2 py-1">
+                                    {format!("Round {}", manager.state.current_round.0)}
+                                </span>
+                            </div>
+                            {move || {
+                                let err = add_player_error.get();
+                                (!err.is_empty()).then(|| view! {
+                                    <p class="text-xs text-red-400">{err}</p>
+                                })
+                            }}
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <input
+                                    type="text"
+                                    placeholder="Player name"
+                                    class="flex-1 bg-gray-950 border border-gray-700 rounded-lg \
+                                           px-3 py-2 text-white text-sm placeholder-gray-600 \
+                                           focus:outline-none focus:border-blue-500 min-h-[44px]"
+                                    prop:value=move || new_player_name.get()
+                                    on:input=move |ev| {
+                                        new_player_name.set(event_target_value(&ev));
+                                        add_player_error.set(String::new());
+                                    }
+                                    on:keydown=move |ev| {
+                                        if ev.key() == "Enter" {
+                                            ev.prevent_default();
+                                            on_add_player();
+                                        }
+                                    }
+                                />
+                                <button
+                                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white \
+                                           text-sm font-semibold rounded-lg transition-colors \
+                                           min-h-[44px] sm:min-w-[120px]"
+                                    on:click=move |_| on_add_player()
+                                >
+                                    "Add Player"
+                                </button>
+                            </div>
+                        </div>
                         {players.into_iter().map(|p| {
                             let pid = p.id;
                             let is_active = p.status == app_core::models::PlayerStatus::Active;

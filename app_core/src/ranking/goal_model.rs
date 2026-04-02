@@ -2,18 +2,16 @@
 //!
 //! Model: each player has a latent log-skill θ_i. Observations enter the
 //! likelihood as raw counts (not transformed), keeping the model a proper
-//! quasi-negative-binomial count model:
+//! negative-binomial count model:
 //!
-//! - PointsPerTeam:  team_score ~ NB(rate = exp(Σ θ_i + pace_offset), r)
-//!                   One observation per team per match.
-//! - PointsPerPlayer: player_score ~ NB(rate = exp(θ_i + context + pace_offset), r)
-//!                   One observation per player per match.
+//! - PointsPerTeam:  team_score ~ NB(rate = exp(Σ θ_i), r)
+//!   One observation per team per match.
+//! - PointsPerPlayer: player_score ~ NB(rate = exp(θ_i + context), r)
+//!   One observation per player per match.
 //! - WinDrawLose:   outcome ~ Bernoulli(σ(θ_i + context))  (logistic)
 //!
-//! Pace/control corrections are additive log-rate offsets in the linear
-//! predictor (not applied to k). The posterior over all θ is approximated via
-//! Laplace (Newton-Raphson on the log-posterior), then used to derive rank
-//! distributions via Monte Carlo.
+//! The posterior over all θ is approximated via Laplace (Newton-Raphson on the
+//! log-posterior), then used to derive rank distributions via Monte Carlo.
 
 use super::RankingEngine;
 use crate::models::{
@@ -28,9 +26,8 @@ use std::collections::HashMap;
 const DEFAULT_DISPERSION: f64 = 3.0;
 
 /// Prior standard deviation on latent skill (log-scale).
-/// Tighter than 1.0 to prevent early jumpy rankings from a single extreme match.
-/// e^(2*0.7) ≈ 4x difference in expected rate between ±2σ players.
-const PRIOR_SIGMA: f64 = 0.7;
+/// e^(2*1.0) ≈ 7x difference in expected rate between ±2σ players.
+const PRIOR_SIGMA: f64 = 1.0;
 
 /// Maximum Newton-Raphson iterations for MAP estimation.
 const MAX_ITER: usize = 50;
@@ -41,11 +38,6 @@ const GRAD_TOL: f64 = 1e-6;
 /// Context coupling weights used in the primary model.
 const TEAMMATE_CONTEXT_WEIGHT: f64 = 0.35;
 const OPPONENT_CONTEXT_WEIGHT: f64 = 0.35;
-
-/// Softens the contribution of raw point totals so the main ranking is less
-/// gameable in high-scoring environments. Aggressive/attack-style rankings can
-/// still expose raw scoring more directly elsewhere.
-const MATCH_CONTROL_BONUS_WEIGHT: f64 = 0.30;
 
 pub struct GoalModelEngine {
     /// NB dispersion parameter
@@ -74,33 +66,6 @@ struct Posterior {
 }
 
 impl GoalModelEngine {
-    /// Additive log-rate offset applied to the linear predictor (not to k).
-    /// Encodes pace normalization and team-control bonus so the NB observation
-    /// remains a proper raw count.
-    fn match_predictor_offset(
-        own_team_points: f64,
-        opponent_team_points: f64,
-        players_in_match: usize,
-        own_team_size: usize,
-    ) -> f64 {
-        let total_points = own_team_points + opponent_team_points;
-        let reference_points = players_in_match.max(1) as f64;
-        // Downweight high-scoring sessions: offset is negative when total > ref.
-        let pace_log_offset = if total_points > reference_points {
-            0.5 * (reference_points / total_points).ln()
-        } else {
-            0.0
-        };
-        let control_offset = if own_team_points > opponent_team_points {
-            MATCH_CONTROL_BONUS_WEIGHT
-                * ((own_team_points + 1.0) / (opponent_team_points + 1.0)).ln()
-                / own_team_size.max(1) as f64
-        } else {
-            0.0
-        };
-        pace_log_offset + control_offset
-    }
-
     /// Fit the Laplace posterior given all completed, non-voided results.
     /// Returns None if there are no results yet (no update possible).
     fn fit(
@@ -179,8 +144,8 @@ impl GoalModelEngine {
     ///   where log p(θ) = -sum_i θ_i² / (2σ²)  (Gaussian prior)
     ///
     /// Likelihood branches on the match score payload type:
-    ///   PointsPerTeam   — one NB observation per team; mu = Σ θ_i + pace_offset
-    ///   PointsPerPlayer — one NB observation per player; mu = θ_i + context + pace_offset
+    ///   PointsPerTeam   — one NB observation per team; mu = Σ θ_i
+    ///   PointsPerPlayer — one NB observation per player; mu = θ_i + context
     ///   WinDrawLose     — per-player logistic (unchanged)
     fn log_posterior_grad_hessian(
         &self,
@@ -258,24 +223,6 @@ impl GoalModelEngine {
                 } => {
                     let Some(match_ctx) = match_ctx else { continue };
 
-                    let total_points = (*team_a_points + *team_b_points) as f64;
-                    let n_playing_a = match_ctx
-                        .team_a
-                        .iter()
-                        .filter(|pid| result.player_played(pid))
-                        .count();
-                    let n_playing_b = match_ctx
-                        .team_b
-                        .iter()
-                        .filter(|pid| result.player_played(pid))
-                        .count();
-                    let reference_points = (n_playing_a + n_playing_b).max(1) as f64;
-                    let pace_log_offset = if total_points > reference_points {
-                        0.5 * (reference_points / total_points).ln()
-                    } else {
-                        0.0
-                    };
-
                     for (team, k_raw) in [
                         (&match_ctx.team_a, *team_a_points),
                         (&match_ctx.team_b, *team_b_points),
@@ -290,7 +237,7 @@ impl GoalModelEngine {
                         }
 
                         let mu_linear: f64 = team_indices.iter().map(|&i| theta[i]).sum();
-                        let lambda = (mu_linear + pace_log_offset).exp();
+                        let lambda = mu_linear.exp();
                         let k = k_raw as f64;
                         let r = self.dispersion;
 
@@ -351,45 +298,7 @@ impl GoalModelEngine {
                         let mu_linear: f64 =
                             coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
 
-                        // Pace and control corrections as additive log-rate offsets.
-                        let predictor_offset = if let Some(match_ctx) = match_ctx {
-                            let own_team_points = result
-                                .team_points_for_player(player_id, match_ctx)
-                                .map(|p| p as f64)
-                                .unwrap_or(k);
-                            let opponent_team_points = result
-                                .opponent_team_points_for_player(player_id, match_ctx)
-                                .map(|p| p as f64)
-                                .unwrap_or(0.0);
-                            let own_team = if match_ctx.team_a.contains(player_id) {
-                                &match_ctx.team_a
-                            } else {
-                                &match_ctx.team_b
-                            };
-                            let opponent_team = if match_ctx.team_a.contains(player_id) {
-                                &match_ctx.team_b
-                            } else {
-                                &match_ctx.team_a
-                            };
-                            let own_team_size = own_team
-                                .iter()
-                                .filter(|pid| result.player_played(pid))
-                                .count();
-                            let opponent_team_size = opponent_team
-                                .iter()
-                                .filter(|pid| result.player_played(pid))
-                                .count();
-                            Self::match_predictor_offset(
-                                own_team_points,
-                                opponent_team_points,
-                                own_team_size + opponent_team_size,
-                                own_team_size,
-                            )
-                        } else {
-                            0.0
-                        };
-
-                        let lambda = (mu_linear + predictor_offset).exp();
+                        let lambda = mu_linear.exp();
                         let r = self.dispersion;
 
                         let dl_dlambda = k / lambda - (r + k) / (r + lambda);
@@ -703,6 +612,7 @@ impl RankingEngine for GoalModelEngine {
 mod tests {
     use super::*;
     use crate::models::*;
+    use std::collections::HashMap;
 
     fn make_player(id: u32, name: &str) -> Player {
         Player {
@@ -728,6 +638,25 @@ mod tests {
             1.0,
             Role::Coach,
         )
+    }
+
+    fn scheduled_match(match_id: u32, team_a: Vec<u32>, team_b: Vec<u32>) -> ScheduledMatch {
+        ScheduledMatch {
+            id: MatchId(match_id),
+            round: RoundNumber(1),
+            field: 1,
+            team_a: team_a.into_iter().map(PlayerId).collect(),
+            team_b: team_b.into_iter().map(PlayerId).collect(),
+            status: MatchStatus::Completed,
+        }
+    }
+
+    fn played_statuses(player_ids: &[u32]) -> HashMap<PlayerId, ParticipationStatus> {
+        player_ids
+            .iter()
+            .copied()
+            .map(|player_id| (PlayerId(player_id), ParticipationStatus::Played))
+            .collect()
     }
 
     #[test]
@@ -775,8 +704,6 @@ mod tests {
 
     #[test]
     fn player_who_sits_out_odd_player_round_keeps_neutral_stats_and_rank() {
-        use std::collections::HashMap;
-
         let engine = GoalModelEngine::default();
         let config = make_config();
         let players: Vec<Player> = (1..=9)
@@ -850,25 +777,77 @@ mod tests {
     }
 
     #[test]
-    fn match_predictor_offset_is_more_negative_for_high_scoring_matches() {
-        // Pace offset should be more negative (lower expected rate) when the
-        // total points far exceed the reference level.
-        let low_offset = GoalModelEngine::match_predictor_offset(10.0, 8.0, 4, 2);
-        let high_offset = GoalModelEngine::match_predictor_offset(20.0, 16.0, 4, 2);
+    fn points_per_team_higher_scoring_team_ranks_better() {
+        let engine = GoalModelEngine::default();
+        let config = make_config();
+        let players = vec![
+            make_player(1, "A1"),
+            make_player(2, "A2"),
+            make_player(3, "B1"),
+            make_player(4, "B2"),
+        ];
+        let match_ctx = scheduled_match(1, vec![1, 2], vec![3, 4]);
+        let matches_by_id = HashMap::from([(match_ctx.id, match_ctx)]);
+        let results: Vec<MatchResult> = (0..6)
+            .map(|_| {
+                MatchResult::new_points_per_team(
+                    MatchId(1),
+                    played_statuses(&[1, 2, 3, 4]),
+                    6,
+                    2,
+                    1.0,
+                    Role::Coach,
+                )
+            })
+            .collect();
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+
+        let rankings =
+            engine.compute_ratings(&players, &result_refs, Some(&matches_by_id), &config);
+        let team_a_rating: f64 = rankings
+            .iter()
+            .filter(|ranking| matches!(ranking.player_id, PlayerId(1) | PlayerId(2)))
+            .map(|ranking| ranking.rating)
+            .sum();
+        let team_b_rating: f64 = rankings
+            .iter()
+            .filter(|ranking| matches!(ranking.player_id, PlayerId(3) | PlayerId(4)))
+            .map(|ranking| ranking.rating)
+            .sum();
+
         assert!(
-            high_offset < low_offset,
-            "high-scoring match should have a more negative log-rate offset: low={low_offset:.3}, high={high_offset:.3}"
+            team_a_rating > team_b_rating,
+            "team with repeated higher team scores should rank better: team_a={team_a_rating:.3}, team_b={team_b_rating:.3}"
         );
     }
 
     #[test]
-    fn match_predictor_offset_gives_control_bonus_to_winning_team_only() {
-        // Winning team gets a positive control component; losing team does not.
-        let winner_offset = GoalModelEngine::match_predictor_offset(5.0, 0.0, 4, 2);
-        let loser_offset = GoalModelEngine::match_predictor_offset(0.0, 5.0, 4, 2);
+    fn score_payload_branching_does_not_depend_on_session_config_mode() {
+        let engine = GoalModelEngine::default();
+        let players = vec![make_player(1, "Striker"), make_player(2, "Defender")];
+        let results: Vec<MatchResult> = (0..5)
+            .map(|match_id| legacy_result(match_id, vec![(1, 3), (2, 0)]))
+            .collect();
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+
+        let mut mismatched_config = make_config();
+        mismatched_config.score_entry_mode = ScoreEntryMode::WinDrawLose;
+        let rankings = engine.compute_ratings(&players, &result_refs, None, &mismatched_config);
+
+        let scorer = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap();
+        let defender = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(2))
+            .unwrap();
+
         assert!(
-            winner_offset > loser_offset,
-            "winning team should have a higher predictor offset: winner={winner_offset:.3}, loser={loser_offset:.3}"
+            scorer.rating > defender.rating,
+            "points-per-player payload should still use the count likelihood when config mode differs: scorer={:.3}, defender={:.3}",
+            scorer.rating,
+            defender.rating
         );
     }
 }
