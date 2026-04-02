@@ -1249,8 +1249,64 @@ pub fn AnalysisTab() -> impl IntoView {
                                         });
                                         strongest_pairs.truncate(6);
 
+                                        // Best pairing: optimal assignment of active players into partner pairs
+                                        let active_player_ids: Vec<_> = manager.state.active_players()
+                                            .map(|p| p.id)
+                                            .collect();
+                                        let best_pairs: Vec<(String, String, f64, f64)> = mat
+                                            .best_pairing(&active_player_ids)
+                                            .into_iter()
+                                            .map(|(a, b)| {
+                                                let name_a = player_map.get(&a)
+                                                    .map(|p| p.name.chars().take(10).collect::<String>())
+                                                    .unwrap_or_else(|| format!("#{}", a.0));
+                                                let name_b = player_map.get(&b)
+                                                    .map(|p| p.name.chars().take(10).collect::<String>())
+                                                    .unwrap_or_else(|| format!("#{}", b.0));
+                                                let score = mat.weighted_pair_score(a, b);
+                                                let reliability = mat.reliability(a, b).unwrap_or(0.0);
+                                                (name_a, name_b, score, reliability)
+                                            })
+                                            .collect();
+
                                         view! {
                                             <div class="space-y-4">
+                                                // Best pairing card
+                                                {(!best_pairs.is_empty()).then(|| view! {
+                                                    <div class="bg-gray-900 border border-blue-800/40 rounded-lg px-3 py-3">
+                                                        <p class="text-xs font-semibold text-blue-300 mb-2">
+                                                            "Recommended partner pairings"
+                                                        </p>
+                                                        <div class="space-y-2">
+                                                            {best_pairs.iter().enumerate().map(|(idx, (name_a, name_b, score, reliability))| {
+                                                                let reliability_pct = (*reliability * 100.0).round() as i32;
+                                                                let dot_count = ((reliability_pct + 19) / 20).clamp(0, 5) as usize;
+                                                                let score_class = if *score > 0.05 { "text-blue-300" }
+                                                                    else if *score < -0.05 { "text-red-400" }
+                                                                    else { "text-gray-400" };
+                                                                let is_first = idx == 0;
+                                                                view! {
+                                                                    <div class=move || format!("flex items-center gap-2 {}",
+                                                                        if is_first { "font-medium" } else { "" })>
+                                                                        <span class="text-gray-200 truncate flex-1 text-sm">
+                                                                            {format!("{name_a} + {name_b}")}
+                                                                        </span>
+                                                                        <span class=format!("tabular-nums text-sm {score_class}")>
+                                                                            {format!("{:+.2}", score)}
+                                                                        </span>
+                                                                        <span class="text-gray-600 text-xs w-10 text-right" title=format!("{}% confidence", reliability_pct)>
+                                                                            {(0..5).map(|d| if d < dot_count { "●" } else { "○" }).collect::<Vec<_>>().join("")}
+                                                                        </span>
+                                                                    </div>
+                                                                }
+                                                            }).collect_view()}
+                                                        </div>
+                                                        <p class="text-xs text-gray-600 mt-2">
+                                                            "Maximises total reliability-weighted synergy across all active players"
+                                                        </p>
+                                                    </div>
+                                                })}
+
                                                 // Individual APM row
                                                 <div>
                                                     <p class="text-xs text-gray-500 mb-2">

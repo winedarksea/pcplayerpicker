@@ -337,6 +337,9 @@ pub struct MatchResult {
     /// 1.0 = full match; 0.5 = half duration, etc. Applied to all outcome weights.
     pub duration_multiplier: f64,
     pub entered_by: Role,
+    /// Wall-clock time when this result was first submitted. None for results
+    /// recorded before this field was introduced (legacy records).
+    pub submitted_at: Option<DateTime<Utc>>,
 }
 
 pub const MIN_DURATION_MULTIPLIER: f64 = 0.5;
@@ -364,6 +367,7 @@ impl MatchResult {
             score_payload: MatchScorePayload::PointsPerPlayer { player_points },
             duration_multiplier,
             entered_by,
+            submitted_at: Some(Utc::now()),
         }
     }
 
@@ -416,6 +420,7 @@ impl MatchResult {
             },
             duration_multiplier,
             entered_by,
+            submitted_at: Some(Utc::now()),
         }
     }
 
@@ -432,6 +437,7 @@ impl MatchResult {
             score_payload: MatchScorePayload::WinDrawLose { outcome },
             duration_multiplier,
             entered_by,
+            submitted_at: Some(Utc::now()),
         }
     }
 
@@ -657,6 +663,8 @@ struct MatchResultSerde {
     entered_by: Role,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scores: Option<HashMap<PlayerId, PlayerMatchScore>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    submitted_at: Option<DateTime<Utc>>,
 }
 
 fn default_duration_multiplier() -> f64 {
@@ -701,6 +709,7 @@ impl From<MatchResultSerde> for MatchResult {
             score_payload,
             duration_multiplier: value.duration_multiplier,
             entered_by: value.entered_by,
+            submitted_at: value.submitted_at,
         }
     }
 }
@@ -714,6 +723,7 @@ impl From<MatchResult> for MatchResultSerde {
             duration_multiplier: value.duration_multiplier,
             entered_by: value.entered_by,
             scores: None,
+            submitted_at: value.submitted_at,
         }
     }
 }

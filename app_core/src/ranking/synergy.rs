@@ -65,6 +65,108 @@ impl SynergyMatrix {
         let j = self.players.iter().position(|&p| p == b)?;
         Some(self.teammate_reliability[i][j])
     }
+
+    /// Reliability-weighted synergy score for a pair: synergy × reliability.
+    /// Used as the edge weight in best-pairing matching.
+    pub fn weighted_pair_score(&self, a: PlayerId, b: PlayerId) -> f64 {
+        let Some(i) = self.players.iter().position(|&p| p == a) else {
+            return 0.0;
+        };
+        let Some(j) = self.players.iter().position(|&p| p == b) else {
+            return 0.0;
+        };
+        self.teammate_synergy[i][j] * self.teammate_reliability[i][j]
+    }
+
+    /// Find the optimal partner pairings for the given active players.
+    ///
+    /// Enumerates all perfect matchings and picks the one that maximises the
+    /// sum of reliability-weighted synergy scores.  Feasible for N ≤ 12 (the
+    /// largest case, N=12, has 10395 matchings).
+    ///
+    /// If `active_players` has an odd count, every possible player to sit out
+    /// is tried and the best even-subset assignment is returned.
+    ///
+    /// Players not present in this matrix are silently ignored.
+    /// Returns an empty vec when fewer than 2 valid players are supplied.
+    /// Pairs are returned in descending weighted-score order.
+    pub fn best_pairing(&self, active_players: &[PlayerId]) -> Vec<(PlayerId, PlayerId)> {
+        let valid: Vec<PlayerId> = active_players
+            .iter()
+            .copied()
+            .filter(|id| self.players.contains(id))
+            .collect();
+
+        if valid.len() < 2 {
+            return vec![];
+        }
+
+        let mut pairs = if valid.len() % 2 == 1 {
+            // Try each player as the odd one out, keep best total
+            let mut best_score = f64::NEG_INFINITY;
+            let mut best_pairs = vec![];
+            for skip in 0..valid.len() {
+                let subset: Vec<PlayerId> = valid
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != skip)
+                    .map(|(_, id)| *id)
+                    .collect();
+                let (score, pairs) = self.max_weight_matching(&subset);
+                if score > best_score {
+                    best_score = score;
+                    best_pairs = pairs;
+                }
+            }
+            best_pairs
+        } else {
+            self.max_weight_matching(&valid).1
+        };
+
+        pairs.sort_by(|(a1, b1), (a2, b2)| {
+            self.weighted_pair_score(*a2, *b2)
+                .partial_cmp(&self.weighted_pair_score(*a1, *b1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        pairs
+    }
+
+    fn max_weight_matching(&self, players: &[PlayerId]) -> (f64, Vec<(PlayerId, PlayerId)>) {
+        debug_assert_eq!(players.len() % 2, 0);
+        if players.is_empty() {
+            return (0.0, vec![]);
+        }
+        let mut best = (f64::NEG_INFINITY, vec![]);
+        self.enumerate_matchings(players, vec![], &mut best);
+        best
+    }
+
+    fn enumerate_matchings(
+        &self,
+        remaining: &[PlayerId],
+        current: Vec<(PlayerId, PlayerId)>,
+        best: &mut (f64, Vec<(PlayerId, PlayerId)>),
+    ) {
+        if remaining.is_empty() {
+            let total: f64 = current
+                .iter()
+                .map(|(a, b)| self.weighted_pair_score(*a, *b))
+                .sum();
+            if total > best.0 {
+                *best = (total, current);
+            }
+            return;
+        }
+        let first = remaining[0];
+        for i in 1..remaining.len() {
+            let partner = remaining[i];
+            let mut next: Vec<PlayerId> = remaining[1..].to_vec();
+            next.remove(i - 1);
+            let mut cur = current.clone();
+            cur.push((first, partner));
+            self.enumerate_matchings(&next, cur, best);
+        }
+    }
 }
 
 pub struct SynergyEngine {
