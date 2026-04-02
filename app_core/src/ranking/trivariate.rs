@@ -345,6 +345,7 @@ mod tests {
             id: MatchId(id),
             round: RoundNumber(1),
             field: 1,
+            scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
             team_a: team_a.into_iter().map(PlayerId).collect(),
             team_b: team_b.into_iter().map(PlayerId).collect(),
             status: MatchStatus::Completed,

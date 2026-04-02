@@ -9,8 +9,7 @@
 ///
 /// This guards against regressions in the ranking engine, scheduler, and event system.
 use app_core::models::*;
-use app_core::ranking::goal_model::GoalModelEngine;
-use app_core::ranking::RankingEngine;
+use app_core::ranking::select_ranking_engine;
 use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
 use app_core::session::SessionManager;
 use std::collections::HashMap;
@@ -99,7 +98,7 @@ fn full_offline_simulation_converges() {
         let config = manager.state.config.clone().unwrap();
         let existing_matches: Vec<_> = manager.state.matches.values().collect();
 
-        let scheduler = select_scheduler(&rankings);
+        let (scheduling_method, scheduler) = select_scheduler(&config, &rankings);
         let start_round = RoundNumber(round as u32 + 1);
         let scheduled = scheduler.generate_schedule(ScheduleGenerationRequest {
             players: &players,
@@ -116,6 +115,7 @@ fn full_offline_simulation_converges() {
         manager.log.append(
             Event::ScheduleGenerated {
                 round: start_round,
+                method: scheduling_method,
                 matches: scheduled.clone(),
             },
             Role::Coach,
@@ -171,8 +171,8 @@ fn full_offline_simulation_converges() {
             .collect();
 
         if !completed_results.is_empty() {
-            let engine = GoalModelEngine::default();
             let config = manager.state.config.clone().unwrap();
+            let (ranking_method, engine) = select_ranking_engine(&config);
             let new_rankings = engine.compute_ratings(
                 &all_players,
                 &completed_results,
@@ -184,6 +184,7 @@ fn full_offline_simulation_converges() {
             manager.log.append(
                 Event::RankingsComputed {
                     round: current_round,
+                    method: ranking_method,
                     rankings: new_rankings,
                 },
                 Role::Coach,
@@ -293,7 +294,7 @@ fn rng_is_deterministic() {
     let config2 = m2.state.config.clone().unwrap();
     let existing_matches: Vec<&ScheduledMatch> = Vec::new();
 
-    let scheduler = select_scheduler(&[]);
+    let (_scheduling_method, scheduler) = select_scheduler(&config1, &[]);
     let sched1 = scheduler.generate_schedule(ScheduleGenerationRequest {
         players: &players,
         rankings: &[],
@@ -368,6 +369,7 @@ fn voided_match_excluded_from_rankings() {
         id: MatchId(1001),
         round: RoundNumber(1),
         field: 1,
+        scheduling_method: SchedulingMethod::RoundRobinV1,
         team_a: vec![ids[0], ids[1]],
         team_b: vec![ids[2], ids[3]],
         status: MatchStatus::Scheduled,
@@ -375,6 +377,7 @@ fn voided_match_excluded_from_rankings() {
     manager.log.append(
         Event::ScheduleGenerated {
             round: RoundNumber(1),
+            method: SchedulingMethod::RoundRobinV1,
             matches: vec![m],
         },
         Role::Coach,
@@ -427,6 +430,7 @@ fn score_correction_overrides_original() {
         id: MatchId(1001),
         round: RoundNumber(1),
         field: 1,
+        scheduling_method: SchedulingMethod::RoundRobinV1,
         team_a: vec![ids[0], ids[1]],
         team_b: vec![ids[2], ids[3]],
         status: MatchStatus::Scheduled,
@@ -434,6 +438,7 @@ fn score_correction_overrides_original() {
     manager.log.append(
         Event::ScheduleGenerated {
             round: RoundNumber(1),
+            method: SchedulingMethod::RoundRobinV1,
             matches: vec![m],
         },
         Role::Coach,

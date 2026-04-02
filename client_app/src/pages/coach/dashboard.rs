@@ -1,4 +1,3 @@
-use gloo_timers::future::TimeoutFuture;
 use super::match_player_sheet::RoundPlayerChangeSheet;
 use super::schedule_export::{
     build_round_schedule_share_snapshot, copy_text_to_clipboard, format_round_schedule_share_text,
@@ -22,9 +21,9 @@ use app_core::io::csv::{self, import_rankings};
 use app_core::models::{
     MatchId, MatchOutcome, MatchResult, MatchStatus, PlayerId, Role, RoundNumber, ScoreEntryMode,
 };
-use app_core::ranking::goal_model::GoalModelEngine;
-use app_core::ranking::RankingEngine;
+use app_core::ranking::select_ranking_engine;
 use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
@@ -300,7 +299,7 @@ pub fn MatchesTab() -> impl IntoView {
                 let existing_matches: Vec<_> = manager.state.matches.values().collect();
                 let starting_round = manager.state.current_round;
                 let num_rounds = config.scheduling_frequency as u32;
-                let scheduler = select_scheduler(&rankings);
+                let (scheduling_method, scheduler) = select_scheduler(&config, &rankings);
                 let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
                     players: &active_players,
                     rankings: &rankings,
@@ -313,6 +312,7 @@ pub fn MatchesTab() -> impl IntoView {
                 manager.log.append(
                     Event::ScheduleGenerated {
                         round: starting_round,
+                        method: scheduling_method,
                         matches,
                     },
                     Role::Coach,
@@ -382,7 +382,7 @@ pub fn MatchesTab() -> impl IntoView {
                 let existing_matches: Vec<_> = manager.state.matches.values().collect();
                 let starting_round = manager.state.current_round;
                 let num_rounds = config.scheduling_frequency as u32;
-                let scheduler = select_scheduler(&rankings);
+                let (scheduling_method, scheduler) = select_scheduler(&config, &rankings);
                 let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
                     players: &active_players,
                     rankings: &rankings,
@@ -395,6 +395,7 @@ pub fn MatchesTab() -> impl IntoView {
                 manager.log.append(
                     Event::ScheduleGenerated {
                         round: starting_round,
+                        method: scheduling_method,
                         matches,
                     },
                     Role::Coach,
@@ -693,6 +694,7 @@ fn MatchResultSummaryCard(
         id: result.match_id,
         round: app_core::models::RoundNumber(round),
         field,
+        scheduling_method: app_core::models::SchedulingMethod::RoundRobinV1,
         team_a: team_a.clone(),
         team_b: team_b.clone(),
         status: MatchStatus::Completed,
@@ -988,7 +990,7 @@ pub fn ResultsTab() -> impl IntoView {
                 let existing_matches: Vec<_> = manager.state.matches.values().collect();
                 let starting_round = manager.state.current_round;
                 let num_rounds = config.scheduling_frequency as u32;
-                let scheduler = select_scheduler(&rankings);
+                let (scheduling_method, scheduler) = select_scheduler(&config, &rankings);
                 let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
                     players: &active_players,
                     rankings: &rankings,
@@ -1001,6 +1003,7 @@ pub fn ResultsTab() -> impl IntoView {
                 manager.log.append(
                     Event::ScheduleGenerated {
                         round: starting_round,
+                        method: scheduling_method,
                         matches,
                     },
                     Role::Coach,
@@ -1040,7 +1043,7 @@ pub fn ResultsTab() -> impl IntoView {
                 let existing_matches: Vec<_> = manager.state.matches.values().collect();
                 let starting_round = manager.state.current_round;
                 let num_rounds = config.scheduling_frequency as u32;
-                let scheduler = select_scheduler(&rankings);
+                let (scheduling_method, scheduler) = select_scheduler(&config, &rankings);
                 let matches = scheduler.generate_schedule(ScheduleGenerationRequest {
                     players: &active_players,
                     rankings: &rankings,
@@ -1053,6 +1056,7 @@ pub fn ResultsTab() -> impl IntoView {
                 manager.log.append(
                     Event::ScheduleGenerated {
                         round: starting_round,
+                        method: scheduling_method,
                         matches,
                     },
                     Role::Coach,
@@ -1496,7 +1500,7 @@ pub fn AnalysisTab() -> impl IntoView {
                 if results.is_empty() {
                     return;
                 }
-                let engine = GoalModelEngine::default();
+                let (ranking_method, engine) = select_ranking_engine(&config);
                 let rankings = engine.compute_ratings(
                     &players,
                     &results,
@@ -1504,9 +1508,14 @@ pub fn AnalysisTab() -> impl IntoView {
                     &config,
                 );
                 let round = manager.state.current_round;
-                manager
-                    .log
-                    .append(Event::RankingsComputed { round, rankings }, Role::Coach);
+                manager.log.append(
+                    Event::RankingsComputed {
+                        round,
+                        method: ranking_method,
+                        rankings,
+                    },
+                    Role::Coach,
+                );
                 manager.state = materialize(&manager.log);
             });
             ctx.session.with(|s| {
@@ -1893,8 +1902,8 @@ pub fn AnalysisTab() -> impl IntoView {
                     _ => {
                         // "overall" tab (default)
                         let confidence_est = if !rankings.is_empty() {
-                            let engine = GoalModelEngine::default();
                             let config = config.clone().unwrap();
+                            let (_ranking_method, engine) = select_ranking_engine(&config);
                             Some(engine.estimated_rounds_to_confidence(&rankings, 3, &config))
                         } else { None };
 
@@ -2364,11 +2373,7 @@ fn RankLane(
                 .take(12)
                 .collect();
             let is_active = r.is_active;
-            let bar_color = if !is_active {
-                "#4b5563"
-            } else {
-                "#2563eb"
-            };
+            let bar_color = if !is_active { "#4b5563" } else { "#2563eb" };
             let dot_color = if !is_active {
                 "#6b7280"
             } else if r.rank <= 3 {

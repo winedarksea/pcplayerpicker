@@ -1,5 +1,7 @@
 use crate::state::{save_session, AppContext};
-use app_core::models::{MatchId, MatchStatus, PlayerId, RoundNumber, ScheduledMatch};
+use app_core::models::{
+    MatchId, MatchStatus, PlayerId, RoundNumber, ScheduledMatch, SchedulingMethod,
+};
 use app_core::schedule_edit::validate_round_schedule_update;
 use app_core::session::SessionManager;
 use leptos::prelude::*;
@@ -23,6 +25,7 @@ struct EditableRoundMatchDraft {
     match_id: MatchId,
     round: RoundNumber,
     field: u8,
+    scheduling_method: SchedulingMethod,
     status: MatchStatus,
     team_a: Vec<Option<PlayerId>>,
     team_b: Vec<Option<PlayerId>>,
@@ -460,6 +463,7 @@ fn build_editable_match_draft(scheduled_match: &ScheduledMatch) -> EditableRound
         match_id: scheduled_match.id,
         round: scheduled_match.round,
         field: scheduled_match.field,
+        scheduling_method: scheduled_match.scheduling_method,
         status: scheduled_match.status.clone(),
         team_a: scheduled_match
             .team_a
@@ -811,6 +815,7 @@ fn build_updated_matches_from_draft(draft: &RoundPlayerChangeDraft) -> Option<Ve
             id: editable_match.match_id,
             round: editable_match.round,
             field: editable_match.field,
+            scheduling_method: editable_match.scheduling_method,
             team_a,
             team_b,
             status: editable_match.status.clone(),

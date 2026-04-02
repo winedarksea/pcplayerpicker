@@ -236,7 +236,7 @@ fn validate_team_size(
 mod tests {
     use super::*;
     use crate::events::Event;
-    use crate::models::{MatchResult, Role, RoundNumber, SessionConfig, Sport};
+    use crate::models::{MatchResult, Role, RoundNumber, SchedulingMethod, SessionConfig, Sport};
     use crate::session::SessionManager;
     use std::collections::HashMap;
 
@@ -250,11 +250,13 @@ mod tests {
         manager.log.append(
             Event::ScheduleGenerated {
                 round: RoundNumber(1),
+                method: SchedulingMethod::RoundRobinV1,
                 matches: vec![
                     ScheduledMatch {
                         id: MatchId(1),
                         round: RoundNumber(1),
                         field: 1,
+                        scheduling_method: SchedulingMethod::RoundRobinV1,
                         team_a: vec![PlayerId(1), PlayerId(2)],
                         team_b: vec![PlayerId(3), PlayerId(4)],
                         status: MatchStatus::Scheduled,
@@ -263,6 +265,7 @@ mod tests {
                         id: MatchId(2),
                         round: RoundNumber(1),
                         field: 2,
+                        scheduling_method: SchedulingMethod::RoundRobinV1,
                         team_a: vec![PlayerId(5), PlayerId(6)],
                         team_b: vec![PlayerId(7), PlayerId(8)],
                         status: MatchStatus::Scheduled,
@@ -285,6 +288,7 @@ mod tests {
                 id: MatchId(1),
                 round: RoundNumber(1),
                 field: 1,
+                scheduling_method: SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(9), PlayerId(2)],
                 team_b: vec![PlayerId(3), PlayerId(4)],
                 status: MatchStatus::Scheduled,
@@ -310,6 +314,7 @@ mod tests {
                 id: MatchId(1),
                 round: RoundNumber(1),
                 field: 1,
+                scheduling_method: SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(5), PlayerId(2)],
                 team_b: vec![PlayerId(3), PlayerId(4)],
                 status: MatchStatus::Scheduled,
@@ -318,6 +323,7 @@ mod tests {
                 id: MatchId(2),
                 round: RoundNumber(1),
                 field: 2,
+                scheduling_method: SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(9), PlayerId(6)],
                 team_b: vec![PlayerId(7), PlayerId(8)],
                 status: MatchStatus::Scheduled,
@@ -354,6 +360,7 @@ mod tests {
                 id: MatchId(1),
                 round: RoundNumber(1),
                 field: 1,
+                scheduling_method: SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(5), PlayerId(2)],
                 team_b: vec![PlayerId(3), PlayerId(4)],
                 status: MatchStatus::Scheduled,
@@ -384,6 +391,7 @@ mod tests {
                 id: MatchId(1),
                 round: RoundNumber(1),
                 field: 1,
+                scheduling_method: SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(1)],
                 team_b: vec![PlayerId(3), PlayerId(4)],
                 status: MatchStatus::Scheduled,
@@ -422,6 +430,7 @@ mod tests {
             id: MatchId(1),
             round: RoundNumber(1),
             field: 1,
+            scheduling_method: SchedulingMethod::RoundRobinV1,
             team_a: vec![PlayerId(5), PlayerId(2)],
             team_b: vec![PlayerId(3), PlayerId(4)],
             status: MatchStatus::Scheduled,
