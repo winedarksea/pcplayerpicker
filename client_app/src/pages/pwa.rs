@@ -101,7 +101,6 @@ pub fn PwaInstallAndOfflineStatusCard() -> impl IntoView {
 
         if let Ok(ready_promise) = service_worker_container.ready() {
             let service_worker_is_active = service_worker_is_active;
-            let page_is_offline_ready = page_is_offline_ready;
             leptos::task::spawn_local(async move {
                 let _ = JsFuture::from(ready_promise).await;
                 service_worker_is_active.set(true);
