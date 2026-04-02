@@ -12,10 +12,10 @@ const TEAM_SIZES: &[u8] = &[1, 2, 3, 4, 5, 7, 11];
 fn score_entry_mode_help_text(mode: ScoreEntryMode) -> &'static str {
     match mode {
         ScoreEntryMode::PointsPerPlayer => {
-            "Enter points for each player individually. Best when teammates can score different amounts."
+            "Enter points for each player individually. Preferred, but not all sports support this level of detail."
         }
         ScoreEntryMode::PointsPerTeam => {
-            "Enter one total for each team. Best when the match is decided by the team score."
+            "Enter one total for each team. Simplest, but less refined analytics."
         }
         ScoreEntryMode::WinDrawLose => {
             "Record only the outcome: Team A win, draw, or Team B win. Best when exact points do not matter."

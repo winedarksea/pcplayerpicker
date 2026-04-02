@@ -23,7 +23,8 @@ impl PlayerAvailabilityDraft {
     fn from_result(result: Option<&MatchResult>, player_id: &PlayerId) -> Self {
         match result.map(|result| result.participation_status(player_id)) {
             Some(ParticipationStatus::Played) => Self::Played,
-            _ => Self::DidNotPlay,
+            Some(ParticipationStatus::DidNotPlay) => Self::DidNotPlay,
+            None => Self::Played,
         }
     }
 
@@ -156,7 +157,7 @@ where
                                 draft
                                     .get(player_id)
                                     .copied()
-                                    .unwrap_or(PlayerAvailabilityDraft::DidNotPlay)
+                                    .unwrap_or(PlayerAvailabilityDraft::Played)
                                     .as_participation_status(),
                             )
                         })
@@ -173,7 +174,7 @@ where
                                     availability
                                         .get(player_id)
                                         .copied()
-                                        .unwrap_or(PlayerAvailabilityDraft::DidNotPlay)
+                                        .unwrap_or(PlayerAvailabilityDraft::Played)
                                         .played()
                                 });
                                 played.then(|| (*player_id, *draft.get(player_id).unwrap_or(&0)))
@@ -267,7 +268,7 @@ where
                                     class=move || {
                                         let active = availability_draft.with(|draft| {
                                             matches!(
-                                                draft.get(&player_id).copied().unwrap_or(PlayerAvailabilityDraft::DidNotPlay),
+                                                draft.get(&player_id).copied().unwrap_or(PlayerAvailabilityDraft::Played),
                                                 PlayerAvailabilityDraft::Played
                                             )
                                         });
@@ -291,7 +292,7 @@ where
                                     class=move || {
                                         let active = availability_draft.with(|draft| {
                                             matches!(
-                                                draft.get(&player_id).copied().unwrap_or(PlayerAvailabilityDraft::DidNotPlay),
+                                                draft.get(&player_id).copied().unwrap_or(PlayerAvailabilityDraft::Played),
                                                 PlayerAvailabilityDraft::DidNotPlay
                                             )
                                         });
