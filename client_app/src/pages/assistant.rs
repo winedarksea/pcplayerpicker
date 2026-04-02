@@ -4,11 +4,12 @@
 //! Score submission posts events directly to the worker API.
 
 use crate::meta::use_page_meta;
+use crate::pages::score_entry::SharedScoreEntryCard;
 use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_only_event_log};
 use crate::read_only_sync::should_run_debounced_activation_refresh;
 use crate::sync::{api_base, auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, Event, EventLog};
-use app_core::models::{MatchResult, MatchStatus, PlayerMatchScore, Role};
+use app_core::models::{MatchResult, MatchStatus, Role, ScoreEntryMode};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use std::collections::HashMap;
@@ -394,12 +395,18 @@ pub fn AssistantPage() -> impl IntoView {
                                                 let pnames = player_names.clone();
                                                 let sid2 = sid.clone();
                                                 let tok2 = tok_val.clone();
+                                                let score_entry_mode = state
+                                                    .config
+                                                    .as_ref()
+                                                    .map(|config| config.score_entry_mode)
+                                                    .unwrap_or(ScoreEntryMode::PointsPerPlayer);
                                                 view! {
                                                     <AssistantScoreCard
                                                         match_id=mid field=field round=rnd
                                                         team_a=team_a team_b=team_b
                                                         player_names=pnames
                                                         existing_result=existing
+                                                        score_entry_mode=score_entry_mode
                                                         session_id=sid2
                                                         token=tok2
                                                     />
@@ -468,139 +475,69 @@ fn AssistantScoreCard(
     team_a: Vec<app_core::models::PlayerId>,
     team_b: Vec<app_core::models::PlayerId>,
     player_names: HashMap<app_core::models::PlayerId, String>,
+    score_entry_mode: ScoreEntryMode,
     existing_result: Option<MatchResult>,
     session_id: String,
     token: String,
 ) -> impl IntoView {
-    use app_core::models::PlayerId;
-
-    let all_ids: Vec<PlayerId> = team_a.iter().chain(team_b.iter()).cloned().collect();
-    let init: HashMap<PlayerId, Option<u16>> = all_ids
-        .iter()
-        .map(|id| {
-            let goals = existing_result
-                .as_ref()
-                .and_then(|r| r.scores.get(id))
-                .and_then(|s| s.goals);
-            (*id, goals)
-        })
-        .collect();
-
-    let draft = RwSignal::new(init);
     let is_saved = RwSignal::new(existing_result.is_some());
     let is_submitting = RwSignal::new(false);
     let save_error = RwSignal::new(String::new());
 
     view! {
-        <div class="bg-gray-900 border border-gray-700/50 rounded-xl overflow-hidden">
-            <div class="px-4 pt-4 pb-3 border-b border-gray-700/30 flex items-center justify-between">
-                <span class="text-sm font-semibold">"Field "{field}" · Rd "{round}</span>
-                {move || is_saved.get().then(|| view! {
-                    <span class="text-xs text-green-400 font-medium">"Submitted ✓"</span>
-                })}
-            </div>
-            <div class="px-4 py-3 space-y-3">
-                {all_ids.iter().map(|&pid| {
-                    let name = player_names.get(&pid).cloned()
-                        .unwrap_or_else(|| format!("#{}", pid.0));
-                    let on_team_a = team_a.contains(&pid);
-                    view! {
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <span class=move || format!("w-2 h-2 rounded-full shrink-0 {}",
-                                if on_team_a { "bg-blue-400" } else { "bg-orange-400" })/>
-                            <span class="flex-1 min-w-[80px] text-sm truncate">{name}</span>
-                            <div class="flex gap-1 flex-wrap">
-                                <button
-                                    class=move || {
-                                        let active = draft.with(|d| d.get(&pid).copied().flatten().is_none());
-                                        format!("px-2 py-1 rounded min-h-[36px] min-w-[40px] text-xs {}",
-                                            if active { "bg-gray-600 text-white font-semibold" }
-                                            else { "bg-gray-800 text-gray-400" })
-                                    }
-                                    on:click=move |_| { draft.update(|d| { d.insert(pid, None); }); }
-                                >"DNP"</button>
-                                {(0u16..=9).map(|n| view! {
-                                    <button
-                                        class=move || {
-                                            let active = draft.with(|d| *d.get(&pid).unwrap_or(&None) == Some(n));
-                                            format!("px-2 py-1 rounded min-h-[36px] min-w-[32px] font-semibold text-sm {}",
-                                                if active { "bg-blue-600 text-white" }
-                                                else { "bg-gray-800 text-gray-400" })
-                                        }
-                                        on:click=move |_| { draft.update(|d| { d.insert(pid, Some(n)); }); }
-                                    >{n}</button>
-                                }).collect_view()}
-                            </div>
-                        </div>
-                    }
-                }).collect_view()}
-            </div>
-            {move || {
-                let err = save_error.get();
-                (!err.is_empty()).then(|| view! {
-                    <p class="px-4 pb-2 text-xs text-red-400">{err.clone()}</p>
-                })
-            }}
-            <div class="px-4 pb-4">
-                <button
-                    class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white \
-                           font-semibold rounded-lg transition-colors min-h-[48px]"
-                    disabled=move || is_submitting.get()
-                    on:click={
-                        let all_ids2 = all_ids.clone();
-                        let session_id2 = session_id.clone();
-                        let token2 = token.clone();
-                        move |_| {
-                            let scores: HashMap<_, _> = draft.with(|d| {
-                                all_ids2.iter().map(|id| {
-                                    (*id, PlayerMatchScore { goals: *d.get(id).unwrap_or(&None) })
-                                }).collect()
-                            });
-                            let result = MatchResult {
-                                match_id,
-                                scores,
-                                duration_multiplier: 1.0,
-                                entered_by: Role::Assistant,
-                            };
-                            // Build minimal EventEnvelope and push to API
-                            let envelope = app_core::events::EventEnvelope {
-                                id: app_core::models::EventId(0), // server assigns real ID
-                                session_version: 0,               // server assigns version
-                                entered_by: Role::Assistant,
-                                payload: Event::ScoreEntered {
-                                    match_id: result.match_id,
-                                    result: result.clone(),
-                                },
-                            };
-                            let sid = session_id2.clone();
-                            let tok = token2.clone();
-                            is_submitting.set(true);
-                            is_saved.set(false);
-                            save_error.set(String::new());
-                            leptos::task::spawn_local(async move {
-                                let body = serde_json::json!({
-                                    "events": [envelope],
-                                    "token": tok,
-                                });
-                                let url = format!("{}/api/sessions/{}/events", api_base(), sid);
-                                match crate::sync::fetch_post_json(&url, &body.to_string()).await {
-                                    Ok(_) => {
-                                        is_saved.set(true);
-                                        save_error.set(String::new());
-                                    }
-                                    Err(e) => {
-                                        is_saved.set(false);
-                                        save_error.set(format!("Submit failed: {e}"));
-                                    }
-                                }
-                                is_submitting.set(false);
-                            });
+        <SharedScoreEntryCard
+            match_id=match_id
+            field=field
+            round=round
+            team_a=team_a
+            team_b=team_b
+            player_names=player_names
+            score_entry_mode=score_entry_mode
+            existing_result=existing_result
+            entered_by=Role::Assistant
+            show_duration_picker=false
+            saved_label="Submitted ✓"
+            submit_label="Submit Scores"
+            is_submitting=Signal::derive(move || is_submitting.get())
+            footer_error=Signal::derive(move || save_error.get())
+            on_submit={
+                let session_id = session_id.clone();
+                let token = token.clone();
+                move |result| {
+                    let envelope = app_core::events::EventEnvelope {
+                        id: app_core::models::EventId(0),
+                        session_version: 0,
+                        entered_by: Role::Assistant,
+                        payload: Event::ScoreEntered {
+                            match_id: result.match_id,
+                            result: result.clone(),
+                        },
+                    };
+                    let sid = session_id.clone();
+                    let tok = token.clone();
+                    is_submitting.set(true);
+                    is_saved.set(false);
+                    save_error.set(String::new());
+                    leptos::task::spawn_local(async move {
+                        let body = serde_json::json!({
+                            "events": [envelope],
+                            "token": tok,
+                        });
+                        let url = format!("{}/api/sessions/{}/events", api_base(), sid);
+                        match crate::sync::fetch_post_json(&url, &body.to_string()).await {
+                            Ok(_) => {
+                                is_saved.set(true);
+                                save_error.set(String::new());
+                            }
+                            Err(error) => {
+                                is_saved.set(false);
+                                save_error.set(format!("Submit failed: {error}"));
+                            }
                         }
-                    }
-                >
-                    {move || if is_submitting.get() { "Submitting…" } else { "Submit Scores" }}
-                </button>
-            </div>
-        </div>
+                        is_submitting.set(false);
+                    });
+                }
+            }
+        />
     }
 }

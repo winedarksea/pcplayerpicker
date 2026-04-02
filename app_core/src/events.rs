@@ -229,9 +229,7 @@ fn apply_event(state: &mut SessionState, event: &Event, entered_by: &Role) {
             }
             // Also update result if present
             if let Some(result) = state.results.get_mut(match_id) {
-                if let Some(score) = result.scores.remove(old_player) {
-                    result.scores.insert(*new_player, score);
-                }
+                result.replace_player_id(*old_player, *new_player);
             }
         }
 
@@ -306,26 +304,26 @@ mod tests {
         let mut log = EventLog::new();
         log.append(Event::SessionCreated(make_config()), Role::Coach);
 
-        let assistant_result = MatchResult {
-            match_id: MatchId(1),
-            scores: {
-                let mut m = HashMap::new();
-                m.insert(PlayerId(1), PlayerMatchScore::scored(1));
-                m
+        let assistant_result = MatchResult::from_legacy_player_scores(
+            MatchId(1),
+            {
+                let mut scores = HashMap::new();
+                scores.insert(PlayerId(1), PlayerMatchScore::scored(1));
+                scores
             },
-            duration_multiplier: 1.0,
-            entered_by: Role::Assistant,
-        };
-        let coach_result = MatchResult {
-            match_id: MatchId(1),
-            scores: {
-                let mut m = HashMap::new();
-                m.insert(PlayerId(1), PlayerMatchScore::scored(3));
-                m
+            1.0,
+            Role::Assistant,
+        );
+        let coach_result = MatchResult::from_legacy_player_scores(
+            MatchId(1),
+            {
+                let mut scores = HashMap::new();
+                scores.insert(PlayerId(1), PlayerMatchScore::scored(3));
+                scores
             },
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        };
+            1.0,
+            Role::Coach,
+        );
 
         log.append(
             Event::ScoreEntered {
@@ -344,7 +342,7 @@ mod tests {
 
         let state = materialize(&log);
         let result = &state.results[&MatchId(1)];
-        assert_eq!(result.scores[&PlayerId(1)].goals, Some(3)); // coach value wins
+        assert_eq!(result.individual_points_for_player(&PlayerId(1)), Some(3));
     }
 
     #[test]
@@ -381,26 +379,26 @@ mod tests {
         let mut log = EventLog::new();
         log.append(Event::SessionCreated(make_config()), Role::Coach);
 
-        let assistant_result_1 = MatchResult {
-            match_id: MatchId(1),
-            scores: {
-                let mut m = HashMap::new();
-                m.insert(PlayerId(1), PlayerMatchScore::scored(1));
-                m
+        let assistant_result_1 = MatchResult::from_legacy_player_scores(
+            MatchId(1),
+            {
+                let mut scores = HashMap::new();
+                scores.insert(PlayerId(1), PlayerMatchScore::scored(1));
+                scores
             },
-            duration_multiplier: 1.0,
-            entered_by: Role::Assistant,
-        };
-        let assistant_result_2 = MatchResult {
-            match_id: MatchId(1),
-            scores: {
-                let mut m = HashMap::new();
-                m.insert(PlayerId(1), PlayerMatchScore::scored(2));
-                m
+            1.0,
+            Role::Assistant,
+        );
+        let assistant_result_2 = MatchResult::from_legacy_player_scores(
+            MatchId(1),
+            {
+                let mut scores = HashMap::new();
+                scores.insert(PlayerId(1), PlayerMatchScore::scored(2));
+                scores
             },
-            duration_multiplier: 1.0,
-            entered_by: Role::Assistant,
-        };
+            1.0,
+            Role::Assistant,
+        );
 
         log.append(
             Event::ScoreEntered {
@@ -419,7 +417,7 @@ mod tests {
 
         let state = materialize(&log);
         let result = &state.results[&MatchId(1)];
-        assert_eq!(result.scores[&PlayerId(1)].goals, Some(2));
+        assert_eq!(result.individual_points_for_player(&PlayerId(1)), Some(2));
     }
 
     #[test]
@@ -454,17 +452,17 @@ mod tests {
             Role::Coach,
         );
 
-        let completed_round_1 = MatchResult {
-            match_id: MatchId(1),
-            scores: {
-                let mut m = HashMap::new();
-                m.insert(PlayerId(1), PlayerMatchScore::scored(1));
-                m.insert(PlayerId(2), PlayerMatchScore::scored(0));
-                m
+        let completed_round_1 = MatchResult::from_legacy_player_scores(
+            MatchId(1),
+            {
+                let mut scores = HashMap::new();
+                scores.insert(PlayerId(1), PlayerMatchScore::scored(1));
+                scores.insert(PlayerId(2), PlayerMatchScore::scored(0));
+                scores
             },
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        };
+            1.0,
+            Role::Coach,
+        );
         log.append(
             Event::ScoreEntered {
                 match_id: MatchId(1),
@@ -499,17 +497,17 @@ mod tests {
             Role::Coach,
         );
 
-        let completed_round_1 = MatchResult {
-            match_id: MatchId(1),
-            scores: {
-                let mut m = HashMap::new();
-                m.insert(PlayerId(1), PlayerMatchScore::scored(1));
-                m.insert(PlayerId(2), PlayerMatchScore::scored(0));
-                m
+        let completed_round_1 = MatchResult::from_legacy_player_scores(
+            MatchId(1),
+            {
+                let mut scores = HashMap::new();
+                scores.insert(PlayerId(1), PlayerMatchScore::scored(1));
+                scores.insert(PlayerId(2), PlayerMatchScore::scored(0));
+                scores
             },
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        };
+            1.0,
+            Role::Coach,
+        );
         log.append(
             Event::ScoreEntered {
                 match_id: MatchId(1),

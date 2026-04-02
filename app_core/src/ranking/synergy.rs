@@ -144,21 +144,10 @@ impl SynergyEngine {
                 continue;
             }
 
-            let goals_a: f64 = scheduled
-                .team_a
-                .iter()
-                .filter_map(|pid| result.scores.get(pid))
-                .filter_map(|score| score.goals)
-                .map(|goals| goals as f64)
-                .sum();
-            let goals_b: f64 = scheduled
-                .team_b
-                .iter()
-                .filter_map(|pid| result.scores.get(pid))
-                .filter_map(|score| score.goals)
-                .map(|goals| goals as f64)
-                .sum();
-            let target = goals_a - goals_b;
+            let Some((team_a_points, team_b_points)) = result.numeric_team_points(scheduled) else {
+                continue;
+            };
+            let target = team_a_points as f64 - team_b_points as f64;
 
             let mut features: Vec<(usize, f64)> = Vec::with_capacity(
                 team_a_played.len() + team_b_played.len() + pair_count(team_a_played.len()) + pair_count(team_b_played.len()),
@@ -276,8 +265,7 @@ fn played_team_indices(
 ) -> Vec<usize> {
     team.iter()
         .filter_map(|player_id| {
-            let score = result.scores.get(player_id)?;
-            if !score.played() {
+            if !result.player_played(player_id) {
                 return None;
             }
             player_index.get(player_id).copied()
@@ -375,13 +363,7 @@ fn observe_team_pairs(
         .iter()
         .copied()
         .filter(|player_id| player_set.contains(player_id))
-        .filter(|player_id| {
-            result
-                .scores
-                .get(player_id)
-                .map(|score| score.played())
-                .unwrap_or(false)
-        })
+        .filter(|player_id| result.player_played(player_id))
         .collect();
 
     for left in 0..played.len() {
@@ -398,7 +380,38 @@ fn observe_team_pairs(
 mod tests {
     use super::*;
     use crate::models::*;
-    use std::collections::HashMap;
+
+    fn make_points_per_player_result(
+        match_id: MatchId,
+        player_points: impl IntoIterator<Item = (PlayerId, Option<u16>)>,
+        duration_multiplier: f64,
+    ) -> MatchResult {
+        let entries: Vec<(PlayerId, Option<u16>)> = player_points.into_iter().collect();
+        let participation_by_player = entries
+            .iter()
+            .map(|(player_id, points)| {
+                (
+                    *player_id,
+                    if points.is_some() {
+                        ParticipationStatus::Played
+                    } else {
+                        ParticipationStatus::DidNotPlay
+                    },
+                )
+            })
+            .collect();
+        let player_points = entries
+            .into_iter()
+            .filter_map(|(player_id, points)| points.map(|points| (player_id, points)))
+            .collect();
+        MatchResult::new_points_per_player(
+            match_id,
+            participation_by_player,
+            player_points,
+            duration_multiplier,
+            Role::Coach,
+        )
+    }
 
     fn make_players(n: usize) -> Vec<Player> {
         (1..=n)
@@ -417,7 +430,7 @@ mod tests {
         let engine = SynergyEngine::default();
         let players = make_players(4);
         // Three matches schedule all six same-team pair combinations (6 schedulable pairs).
-        let sched = vec![
+        let sched = [
             ScheduledMatch {
                 id: MatchId(1),
                 round: RoundNumber(1),
@@ -445,17 +458,16 @@ mod tests {
         ];
         // Only one result, and player 2 did not play — so only pair (3,4) is observed.
         // 1 observed pair out of 6 schedulable = 16.7%, below the 30% threshold.
-        let result = MatchResult {
-            match_id: MatchId(1),
-            scores: HashMap::from([
-                (PlayerId(1), PlayerMatchScore::scored(2)),
-                (PlayerId(2), PlayerMatchScore::did_not_play()),
-                (PlayerId(3), PlayerMatchScore::scored(1)),
-                (PlayerId(4), PlayerMatchScore::scored(1)),
-            ]),
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        };
+        let result = make_points_per_player_result(
+            MatchId(1),
+            [
+                (PlayerId(1), Some(2)),
+                (PlayerId(2), None),
+                (PlayerId(3), Some(1)),
+                (PlayerId(4), Some(1)),
+            ],
+            1.0,
+        );
         let sched_refs: Vec<_> = sched.iter().collect();
         let result_val = engine.compute(&players, &sched_refs, &[&result]);
         assert!(result_val.is_none());
@@ -498,16 +510,15 @@ mod tests {
 
         let results: Vec<MatchResult> = sched
             .iter()
-            .map(|sm| MatchResult {
-                match_id: sm.id,
-                scores: sm
-                    .team_a
-                    .iter()
-                    .chain(sm.team_b.iter())
-                    .map(|&pid| (pid, PlayerMatchScore::scored(2)))
-                    .collect(),
-                duration_multiplier: 1.0,
-                entered_by: Role::Coach,
+            .map(|sm| {
+                make_points_per_player_result(
+                    sm.id,
+                    sm.team_a
+                        .iter()
+                        .chain(sm.team_b.iter())
+                        .map(|&player_id| (player_id, Some(2))),
+                    1.0,
+                )
             })
             .collect();
 
@@ -540,7 +551,7 @@ mod tests {
             base_pair_lambda: 0.5,
         };
         let players = make_players(3);
-        let matches = vec![
+        let matches = [
             ScheduledMatch {
                 id: MatchId(1),
                 round: RoundNumber(1),
@@ -558,27 +569,25 @@ mod tests {
                 status: MatchStatus::Completed,
             },
         ];
-        let results = vec![
-            MatchResult {
-                match_id: MatchId(1),
-                scores: HashMap::from([
-                    (PlayerId(1), PlayerMatchScore::scored(3)),
-                    (PlayerId(2), PlayerMatchScore::scored(2)),
-                    (PlayerId(3), PlayerMatchScore::scored(1)),
-                ]),
-                duration_multiplier: 1.0,
-                entered_by: Role::Coach,
-            },
-            MatchResult {
-                match_id: MatchId(2),
-                scores: HashMap::from([
-                    (PlayerId(1), PlayerMatchScore::scored(2)),
-                    (PlayerId(2), PlayerMatchScore::scored(2)),
-                    (PlayerId(3), PlayerMatchScore::scored(1)),
-                ]),
-                duration_multiplier: 0.5,
-                entered_by: Role::Coach,
-            },
+        let results = [
+            make_points_per_player_result(
+                MatchId(1),
+                [
+                    (PlayerId(1), Some(3)),
+                    (PlayerId(2), Some(2)),
+                    (PlayerId(3), Some(1)),
+                ],
+                1.0,
+            ),
+            make_points_per_player_result(
+                MatchId(2),
+                [
+                    (PlayerId(1), Some(2)),
+                    (PlayerId(2), Some(2)),
+                    (PlayerId(3), Some(1)),
+                ],
+                0.5,
+            ),
         ];
 
         let match_refs: Vec<_> = matches.iter().collect();
@@ -603,17 +612,16 @@ mod tests {
             team_b: vec![PlayerId(3), PlayerId(4)],
             status: MatchStatus::Completed,
         };
-        let result = MatchResult {
-            match_id: MatchId(1),
-            scores: HashMap::from([
-                (PlayerId(1), PlayerMatchScore::scored(2)),
-                (PlayerId(2), PlayerMatchScore::did_not_play()),
-                (PlayerId(3), PlayerMatchScore::scored(1)),
-                (PlayerId(4), PlayerMatchScore::scored(1)),
-            ]),
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        };
+        let result = make_points_per_player_result(
+            MatchId(1),
+            [
+                (PlayerId(1), Some(2)),
+                (PlayerId(2), None),
+                (PlayerId(3), Some(1)),
+                (PlayerId(4), Some(1)),
+            ],
+            1.0,
+        );
 
         // schedulable pairs = (1,2) and (3,4) = 2; observed = (3,4) only = 1; 50% ≥ 30%.
         let mat = engine

@@ -1,7 +1,7 @@
 use crate::meta::use_page_meta;
 use crate::state::{save_session, AppContext};
 use app_core::io::csv::import_players;
-use app_core::models::{SessionConfig, Sport};
+use app_core::models::{ScoreEntryMode, SessionConfig, Sport};
 use app_core::scheduler::fields_needed;
 use app_core::session::SessionManager;
 use leptos::prelude::*;
@@ -22,7 +22,9 @@ pub fn SetupPage() -> impl IntoView {
     let navigate = use_navigate();
 
     // ── Form state ────────────────────────────────────────────────────────
+    let sport = RwSignal::new(Sport::Soccer);
     let team_size = RwSignal::new(2u8);
+    let score_entry_mode = RwSignal::new(ScoreEntryMode::PointsPerPlayer);
     let player_count = RwSignal::new(8u32);
     let sched_frequency = RwSignal::new(1u8); // reschedule every N rounds
     let match_duration = RwSignal::new(String::new()); // empty = untimed
@@ -84,7 +86,8 @@ pub fn SetupPage() -> impl IntoView {
             }
         };
 
-        let mut config = SessionConfig::new(ts, sched_frequency.get(), Sport::Soccer);
+        let mut config = SessionConfig::new(ts, sched_frequency.get(), sport.get_untracked());
+        config.score_entry_mode = score_entry_mode.get_untracked();
         config.match_duration_minutes = duration;
 
         let mut manager = SessionManager::new(config);
@@ -121,6 +124,44 @@ pub fn SetupPage() -> impl IntoView {
 
                 // ── Team size ─────────────────────────────────────────────
                 <section>
+                    <h2 class="section-label">"Sport"</h2>
+                    <div class="flex flex-wrap gap-2">
+                        {Sport::built_in_sports().iter().map(|sport_option| {
+                            let sport_option = sport_option.clone();
+                            let label = sport_option.profile().label;
+                            let class_sport_option = sport_option.clone();
+                            let click_sport_option = sport_option.clone();
+                            view! {
+                                <button
+                                    class=move || {
+                                        let base = "px-4 py-3 rounded-xl border font-semibold \
+                                                    text-sm transition-colors min-h-[48px]";
+                                        if sport.get() == class_sport_option {
+                                            format!("{base} bg-blue-600 border-blue-500 text-white")
+                                        } else {
+                                            format!("{base} bg-gray-900 border-gray-700 \
+                                                    text-gray-300 hover:border-gray-500")
+                                        }
+                                    }
+                                    on:click=move |_| {
+                                        let profile = click_sport_option.profile();
+                                        sport.set(click_sport_option.clone());
+                                        team_size.set(profile.default_team_size);
+                                        score_entry_mode.set(profile.default_score_entry_mode);
+                                        let min = (profile.default_team_size as u32) * 4;
+                                        if player_count.get_untracked() < min {
+                                            player_count.set(min);
+                                        }
+                                    }
+                                >
+                                    {label}
+                                </button>
+                            }
+                        }).collect_view()}
+                    </div>
+                </section>
+
+                <section>
                     <h2 class="section-label">"Team Size"</h2>
                     <div class="flex flex-wrap gap-2">
                         {TEAM_SIZES.iter().map(|&ts| {
@@ -150,6 +191,33 @@ pub fn SetupPage() -> impl IntoView {
                                 </button>
                             }
                         }).collect_view()}
+                    </div>
+                </section>
+
+                <section>
+                    <h2 class="section-label">"Score Entry"</h2>
+                    <div class="flex flex-wrap gap-2">
+                        {[ScoreEntryMode::PointsPerPlayer, ScoreEntryMode::PointsPerTeam, ScoreEntryMode::WinDrawLose]
+                            .into_iter()
+                            .map(|mode| {
+                                view! {
+                                    <button
+                                        class=move || {
+                                            let base = "px-4 py-3 rounded-xl border font-semibold \
+                                                        text-sm transition-colors min-h-[48px]";
+                                            if score_entry_mode.get() == mode {
+                                                format!("{base} bg-blue-600 border-blue-500 text-white")
+                                            } else {
+                                                format!("{base} bg-gray-900 border-gray-700 \
+                                                        text-gray-300 hover:border-gray-500")
+                                            }
+                                        }
+                                        on:click=move |_| score_entry_mode.set(mode)
+                                    >
+                                        {mode.to_string()}
+                                    </button>
+                                }
+                            }).collect_view()}
                     </div>
                 </section>
 

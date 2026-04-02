@@ -3,8 +3,8 @@
 //! Supports RFC4180-style quoted fields, escaped quotes, and embedded newlines.
 
 use crate::models::{
-    clamp_duration_multiplier, MatchId, MatchResult, Player, PlayerRanking, ScheduledMatch,
-    SessionConfig,
+    clamp_duration_multiplier, MatchId, MatchOutcome, MatchResult, ParticipationStatus, Player,
+    PlayerRanking, ScheduledMatch, ScoreEntryMode, SessionConfig,
 };
 use std::collections::HashMap;
 use thiserror::Error;
@@ -19,14 +19,22 @@ pub enum CsvError {
 
 pub type CsvResult<T> = Result<T, CsvError>;
 
+#[derive(Debug, Clone)]
+pub struct ImportedMatchParticipant {
+    pub name: String,
+    pub participation_status: ParticipationStatus,
+    pub player_points: Option<u16>,
+}
+
 /// One imported match with team assignments preserved.
-/// `goals = None` means the player did not play.
 #[derive(Debug, Clone)]
 pub struct RawImportedMatch {
     pub round: u32,
-    /// (player_name, goals). `goals = None` → did not play.
-    pub team_a: Vec<(String, Option<u16>)>,
-    pub team_b: Vec<(String, Option<u16>)>,
+    pub team_a: Vec<ImportedMatchParticipant>,
+    pub team_b: Vec<ImportedMatchParticipant>,
+    pub team_a_points: Option<u16>,
+    pub team_b_points: Option<u16>,
+    pub outcome: Option<MatchOutcome>,
     pub duration_multiplier: f64,
 }
 
@@ -34,6 +42,7 @@ pub struct RawImportedMatch {
 #[derive(Debug, Clone)]
 pub struct ImportedResults {
     pub sport: Option<String>,
+    pub score_entry_mode: Option<ScoreEntryMode>,
     pub team_size: Option<u8>,
     pub scheduling_frequency: Option<u8>,
     pub match_duration_minutes: Option<u16>,
@@ -151,7 +160,7 @@ struct RankingCols {
     rank_lo: usize,
     rank_hi: usize,
     matches_played: usize,
-    total_goals: usize,
+    total_score: usize,
     prob_top_k: Option<usize>,
     active: Option<usize>,
 }
@@ -166,7 +175,7 @@ impl RankingCols {
             rank_lo: 4,
             rank_hi: 5,
             matches_played: 6,
-            total_goals: 7,
+            total_score: 7,
             prob_top_k: Some(8),
             active: Some(9),
         }
@@ -196,7 +205,7 @@ fn parse_rankings_columns(header: &[String]) -> CsvResult<RankingCols> {
         rank_lo: req(&["rank_lo_90", "rank_lo"], "rank_lo_90")?,
         rank_hi: req(&["rank_hi_90", "rank_hi"], "rank_hi_90")?,
         matches_played: req(&["matches_played"], "matches_played")?,
-        total_goals: req(&["total_goals"], "total_goals")?,
+        total_score: req(&["total_score", "total_goals"], "total_score")?,
         prob_top_k: header_index(header, &["prob_top_k"]),
         active: header_index(header, &["active", "is_active"]),
     })
@@ -223,6 +232,42 @@ fn parse_active(raw: &str, row_num: usize) -> CsvResult<bool> {
     }
 }
 
+fn parse_score_entry_mode(raw: &str) -> Option<ScoreEntryMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "points_per_team" | "points per team" => Some(ScoreEntryMode::PointsPerTeam),
+        "points_per_player" | "points per player" => Some(ScoreEntryMode::PointsPerPlayer),
+        "win_draw_lose" | "win / draw / lose" | "win-draw-lose" => {
+            Some(ScoreEntryMode::WinDrawLose)
+        }
+        _ => None,
+    }
+}
+
+fn score_entry_mode_meta_label(score_entry_mode: ScoreEntryMode) -> &'static str {
+    match score_entry_mode {
+        ScoreEntryMode::PointsPerTeam => "points_per_team",
+        ScoreEntryMode::PointsPerPlayer => "points_per_player",
+        ScoreEntryMode::WinDrawLose => "win_draw_lose",
+    }
+}
+
+fn parse_match_outcome(raw: &str) -> Option<MatchOutcome> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "team_a_win" | "team a win" | "a" => Some(MatchOutcome::TeamAWin),
+        "draw" => Some(MatchOutcome::Draw),
+        "team_b_win" | "team b win" | "b" => Some(MatchOutcome::TeamBWin),
+        _ => None,
+    }
+}
+
+fn match_outcome_csv_value(outcome: MatchOutcome) -> &'static str {
+    match outcome {
+        MatchOutcome::TeamAWin => "team_a_win",
+        MatchOutcome::Draw => "draw",
+        MatchOutcome::TeamBWin => "team_b_win",
+    }
+}
+
 /// Export rankings to CSV string.
 pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String {
     let mut out = String::new();
@@ -236,7 +281,7 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
             "rank_lo_90".to_string(),
             "rank_hi_90".to_string(),
             "matches_played".to_string(),
-            "total_goals".to_string(),
+            "total_score".to_string(),
             "prob_top_k".to_string(),
             "active".to_string(),
         ],
@@ -260,7 +305,7 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
                 r.rank_range_90.0.to_string(),
                 r.rank_range_90.1.to_string(),
                 r.matches_played.to_string(),
-                r.total_goals.to_string(),
+                r.total_score.to_string(),
                 format!("{:.4}", r.prob_top_k),
                 if r.is_active { "yes" } else { "no" }.to_string(),
             ],
@@ -287,6 +332,10 @@ pub fn export_results(
 
     // ── Metadata header ──────────────────────────────────────────────────────
     out.push_str(&format!("# sport: {}\n", config.sport));
+    out.push_str(&format!(
+        "# score_entry_mode: {}\n",
+        score_entry_mode_meta_label(config.score_entry_mode)
+    ));
     out.push_str(&format!("# team_size: {}\n", config.team_size));
     out.push_str(&format!(
         "# scheduling_frequency: {}\n",
@@ -310,8 +359,11 @@ pub fn export_results(
             "round".to_string(),
             "team".to_string(),
             "player".to_string(),
-            "goals".to_string(),
-            "did_not_play".to_string(),
+            "participation_status".to_string(),
+            "player_points".to_string(),
+            "team_a_points".to_string(),
+            "team_b_points".to_string(),
+            "outcome".to_string(),
             "duration_multiplier".to_string(),
         ],
     );
@@ -330,23 +382,45 @@ pub fn export_results(
         let round = sm.map(|m| m.round.0).unwrap_or(0);
         let team_a_ids: Vec<_> = sm.map(|m| m.team_a.clone()).unwrap_or_default();
         let team_b_ids: Vec<_> = sm.map(|m| m.team_b.clone()).unwrap_or_default();
+        let numeric_team_points = sm.and_then(|scheduled_match| result.numeric_team_points(scheduled_match));
+        let outcome_value = match &result.score_payload {
+            crate::models::MatchScorePayload::WinDrawLose { outcome } => {
+                Some(match_outcome_csv_value(*outcome).to_string())
+            }
+            _ => None,
+        };
 
         let write_row = |out: &mut String, pid: &crate::models::PlayerId, team: u8| {
-            if let Some(score) = result.scores.get(pid) {
-                let name = name_map.get(&pid.0).copied().unwrap_or("?");
-                write_csv_record(
-                    out,
-                    &[
-                        result.match_id.0.to_string(),
-                        round.to_string(),
-                        team.to_string(),
-                        name.to_string(),
-                        score.goals.unwrap_or(0).to_string(),
-                        if score.goals.is_none() { "yes" } else { "no" }.to_string(),
-                        result.duration_multiplier.to_string(),
-                    ],
-                );
-            }
+            let participation_status = result.participation_status(pid);
+            let name = name_map.get(&pid.0).copied().unwrap_or("?");
+            let player_points = result
+                .individual_points_for_player(pid)
+                .map(|points| points.to_string())
+                .unwrap_or_default();
+            let (team_a_points, team_b_points) = numeric_team_points
+                .map(|(team_a_points, team_b_points)| {
+                    (team_a_points.to_string(), team_b_points.to_string())
+                })
+                .unwrap_or_default();
+            write_csv_record(
+                out,
+                &[
+                    result.match_id.0.to_string(),
+                    round.to_string(),
+                    team.to_string(),
+                    name.to_string(),
+                    if participation_status.played() {
+                        "played".to_string()
+                    } else {
+                        "did_not_play".to_string()
+                    },
+                    player_points,
+                    team_a_points,
+                    team_b_points,
+                    outcome_value.clone().unwrap_or_default(),
+                    result.duration_multiplier.to_string(),
+                ],
+            );
         };
 
         for pid in &team_a_ids {
@@ -362,7 +436,7 @@ pub fn export_results(
             .chain(team_b_ids.iter())
             .copied()
             .collect();
-        for pid in result.scores.keys() {
+        for pid in result.participation_by_player.keys() {
             if !team_ids.contains(pid) {
                 write_row(&mut out, pid, 0);
             }
@@ -379,6 +453,7 @@ pub fn export_results(
 /// present (e.g., an older export), the player list is inferred from the data rows.
 pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
     let mut sport: Option<String> = None;
+    let mut score_entry_mode: Option<ScoreEntryMode> = None;
     let mut team_size: Option<u8> = None;
     let mut scheduling_frequency: Option<u8> = None;
     let mut match_duration_minutes: Option<u16> = None;
@@ -393,6 +468,8 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             let meta = trimmed.trim_start_matches('#').trim();
             if let Some(val) = meta.strip_prefix("sport:") {
                 sport = Some(val.trim().to_string());
+            } else if let Some(val) = meta.strip_prefix("score_entry_mode:") {
+                score_entry_mode = parse_score_entry_mode(val.trim());
             } else if let Some(val) = meta.strip_prefix("team_size:") {
                 team_size = val.trim().parse().ok();
             } else if let Some(val) = meta.strip_prefix("scheduling_frequency:") {
@@ -413,14 +490,17 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
     let data_csv = data_lines.join("\n");
     let records = parse_csv_records(&data_csv)?;
 
-    // Detect column positions from the header row.
     let mut col_match_id = 0usize;
     let mut col_round = 1usize;
     let mut col_team = 2usize;
     let mut col_player = 3usize;
-    let mut col_goals = 4usize;
-    let mut col_dnp = 5usize;
-    let mut col_duration = 6usize;
+    let mut col_participation_status: Option<usize> = None;
+    let mut col_player_points: Option<usize> = None;
+    let mut col_dnp: Option<usize> = None;
+    let mut col_team_a_points: Option<usize> = None;
+    let mut col_team_b_points: Option<usize> = None;
+    let mut col_outcome: Option<usize> = None;
+    let mut col_duration = 9usize;
     let mut data_start = 0usize;
 
     if let Some(header) = records.first() {
@@ -433,9 +513,15 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             col_round = header_index(header, &["round"]).unwrap_or(1);
             col_team = header_index(header, &["team"]).unwrap_or(2);
             col_player = header_index(header, &["player"]).unwrap_or(3);
-            col_goals = header_index(header, &["goals"]).unwrap_or(4);
-            col_dnp = header_index(header, &["did_not_play", "dnp"]).unwrap_or(5);
-            col_duration = header_index(header, &["duration_multiplier", "duration"]).unwrap_or(6);
+            col_participation_status =
+                header_index(header, &["participation_status", "status"]);
+            col_player_points = header_index(header, &["player_points", "goals"]);
+            col_dnp = header_index(header, &["did_not_play", "dnp"]);
+            col_team_a_points = header_index(header, &["team_a_points"]);
+            col_team_b_points = header_index(header, &["team_b_points"]);
+            col_outcome = header_index(header, &["outcome"]);
+            col_duration =
+                header_index(header, &["duration_multiplier", "duration"]).unwrap_or(9);
             data_start = 1;
         }
     }
@@ -445,7 +531,11 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
         round: u32,
         team: u8,
         player: String,
-        goals: Option<u16>,
+        participation_status: ParticipationStatus,
+        player_points: Option<u16>,
+        team_a_points: Option<u16>,
+        team_b_points: Option<u16>,
+        outcome: Option<MatchOutcome>,
         duration: f64,
     }
 
@@ -476,17 +566,57 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             .get(col_team)
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0);
-        let dnp = row
-            .get(col_dnp)
-            .map(|s| s.trim().eq_ignore_ascii_case("yes"))
-            .unwrap_or(false);
-        let goals: Option<u16> = if dnp {
-            None
+        let participation_status = if let Some(col_idx) = col_participation_status {
+            match row.get(col_idx).map(|s| s.trim().to_ascii_lowercase()) {
+                Some(value) if value == "played" => ParticipationStatus::Played,
+                Some(value) if value == "did_not_play" || value == "dnp" => {
+                    ParticipationStatus::DidNotPlay
+                }
+                _ => {
+                    let did_not_play = col_dnp
+                        .and_then(|dnp_idx| row.get(dnp_idx))
+                        .map(|s| s.trim().eq_ignore_ascii_case("yes"))
+                        .unwrap_or(false);
+                    if did_not_play {
+                        ParticipationStatus::DidNotPlay
+                    } else {
+                        ParticipationStatus::Played
+                    }
+                }
+            }
         } else {
-            row.get(col_goals)
-                .and_then(|s| s.trim().parse().ok())
-                .or(Some(0))
+            let did_not_play = col_dnp
+                .and_then(|dnp_idx| row.get(dnp_idx))
+                .map(|s| s.trim().eq_ignore_ascii_case("yes"))
+                .unwrap_or(false);
+            if did_not_play {
+                ParticipationStatus::DidNotPlay
+            } else {
+                ParticipationStatus::Played
+            }
         };
+        let player_points = if participation_status.played() {
+            col_player_points
+                .and_then(|points_idx| row.get(points_idx))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok())
+        } else {
+            None
+        };
+        let team_a_points = col_team_a_points
+            .and_then(|points_idx| row.get(points_idx))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok());
+        let team_b_points = col_team_b_points
+            .and_then(|points_idx| row.get(points_idx))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse().ok());
+        let outcome = col_outcome
+            .and_then(|outcome_idx| row.get(outcome_idx))
+            .and_then(|s| parse_match_outcome(s));
         let duration: f64 = row
             .get(col_duration)
             .and_then(|s| s.trim().parse().ok())
@@ -497,7 +627,11 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             round,
             team,
             player,
-            goals,
+            participation_status,
+            player_points,
+            team_a_points,
+            team_b_points,
+            outcome,
             duration: clamp_duration_multiplier(duration),
         });
     }
@@ -516,26 +650,54 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
         groups.entry(row.match_id.clone()).or_default().push(i);
     }
 
+    if score_entry_mode.is_none() {
+        score_entry_mode = if flat.iter().any(|row| row.outcome.is_some()) {
+            Some(ScoreEntryMode::WinDrawLose)
+        } else if flat.iter().any(|row| row.player_points.is_some()) {
+            Some(ScoreEntryMode::PointsPerPlayer)
+        } else if flat
+            .iter()
+            .any(|row| row.team_a_points.is_some() || row.team_b_points.is_some())
+        {
+            Some(ScoreEntryMode::PointsPerTeam)
+        } else {
+            Some(ScoreEntryMode::PointsPerPlayer)
+        };
+    }
+
     let mut imported_matches: Vec<RawImportedMatch> = Vec::new();
     for mid in &seen_ids {
         let indices = &groups[mid];
         let round = flat[indices[0]].round;
         let duration = flat[indices[0]].duration;
-        let mut team_a: Vec<(String, Option<u16>)> = Vec::new();
-        let mut team_b: Vec<(String, Option<u16>)> = Vec::new();
+        let mut team_a: Vec<ImportedMatchParticipant> = Vec::new();
+        let mut team_b: Vec<ImportedMatchParticipant> = Vec::new();
+        let mut team_a_points: Option<u16> = None;
+        let mut team_b_points: Option<u16> = None;
+        let mut outcome: Option<MatchOutcome> = None;
         for &idx in indices {
             let row = &flat[idx];
-            let entry = (row.player.clone(), row.goals);
+            let entry = ImportedMatchParticipant {
+                name: row.player.clone(),
+                participation_status: row.participation_status,
+                player_points: row.player_points,
+            };
             if row.team == 0 {
                 team_a.push(entry);
             } else {
                 team_b.push(entry);
             }
+            team_a_points = team_a_points.or(row.team_a_points);
+            team_b_points = team_b_points.or(row.team_b_points);
+            outcome = outcome.or(row.outcome);
         }
         imported_matches.push(RawImportedMatch {
             round,
             team_a,
             team_b,
+            team_a_points,
+            team_b_points,
+            outcome,
             duration_multiplier: duration,
         });
     }
@@ -552,6 +714,7 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
 
     Ok(ImportedResults {
         sport,
+        score_entry_mode,
         team_size,
         scheduling_frequency,
         match_duration_minutes,
@@ -617,9 +780,9 @@ pub fn import_rankings(csv: &str) -> CsvResult<Vec<(String, crate::models::Playe
             parse_required(row, cols.matches_played, "matches_played", row_num)?
                 .parse()
                 .map_err(|_| CsvError::Format(format!("bad matches_played at row {row_num}")))?;
-        let total_goals: u32 = parse_required(row, cols.total_goals, "total_goals", row_num)?
+        let total_score: u32 = parse_required(row, cols.total_score, "total_score", row_num)?
             .parse()
-            .map_err(|_| CsvError::Format(format!("bad total_goals at row {row_num}")))?;
+            .map_err(|_| CsvError::Format(format!("bad total_score at row {row_num}")))?;
 
         let prob_top_k: f64 = cols
             .prob_top_k
@@ -647,7 +810,7 @@ pub fn import_rankings(csv: &str) -> CsvResult<Vec<(String, crate::models::Playe
                 rank,
                 rank_range_90: (rank_lo, rank_hi),
                 matches_played,
-                total_goals,
+                total_score,
                 prob_top_k,
                 is_active,
             },
@@ -715,7 +878,7 @@ mod tests {
                 rank: 1,
                 rank_range_90: (1, 2),
                 matches_played: 5,
-                total_goals: 8,
+                total_score: 8,
                 prob_top_k: 0.8,
                 is_active: true,
             },
@@ -726,7 +889,7 @@ mod tests {
                 rank: 2,
                 rank_range_90: (1, 2),
                 matches_played: 5,
-                total_goals: 2,
+                total_score: 2,
                 prob_top_k: 0.2,
                 is_active: false,
             },

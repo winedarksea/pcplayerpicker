@@ -6,8 +6,9 @@
 use crate::events::{Event, EventLog};
 use crate::io::csv::ImportedResults;
 use crate::models::{
-    MatchId, MatchResult, MatchStatus, Player, PlayerId, PlayerMatchScore, PlayerStatus, Role,
-    RoundNumber, ScheduledMatch, SessionConfig, SessionState, Sport,
+    MatchId, MatchOutcome, MatchResult, MatchStatus, ParticipationStatus, Player, PlayerId,
+    PlayerStatus, Role, RoundNumber, ScheduledMatch, ScoreEntryMode, SessionConfig, SessionState,
+    Sport,
 };
 use crate::rng::SessionRng;
 use crate::schedule_edit::{validate_round_schedule_update, RoundScheduleEditError};
@@ -15,8 +16,13 @@ use crate::schedule_edit::{validate_round_schedule_update, RoundScheduleEditErro
 fn parse_sport(s: &str) -> Sport {
     match s.trim() {
         "Soccer" => Sport::Soccer,
+        "Pickleball" => Sport::Pickleball,
+        "Table Tennis" => Sport::TableTennis,
+        "Volleyball" => Sport::Volleyball,
+        "Badminton" => Sport::Badminton,
         "Basketball" => Sport::Basketball,
         "Chess" => Sport::Chess,
+        "Other" => Sport::Other,
         other => Sport::Custom(other.to_string()),
     }
 }
@@ -62,8 +68,12 @@ impl SessionManager {
             .as_deref()
             .map(parse_sport)
             .unwrap_or(Sport::Soccer);
+        let score_entry_mode = imported
+            .score_entry_mode
+            .unwrap_or(ScoreEntryMode::PointsPerPlayer);
 
         let mut config = SessionConfig::new(team_size, scheduling_frequency, sport);
+        config.score_entry_mode = score_entry_mode;
         config.match_duration_minutes = imported.match_duration_minutes;
 
         let mut manager = SessionManager::new(config);
@@ -102,12 +112,12 @@ impl SessionManager {
                 let team_a: Vec<PlayerId> = raw
                     .team_a
                     .iter()
-                    .filter_map(|(name, _)| name_to_id.get(name).copied())
+                    .filter_map(|participant| name_to_id.get(&participant.name).copied())
                     .collect();
                 let team_b: Vec<PlayerId> = raw
                     .team_b
                     .iter()
-                    .filter_map(|(name, _)| name_to_id.get(name).copied())
+                    .filter_map(|participant| name_to_id.get(&participant.name).copied())
                     .collect();
 
                 scheduled.push(ScheduledMatch {
@@ -119,27 +129,85 @@ impl SessionManager {
                     status: MatchStatus::Scheduled,
                 });
 
-                let scores: std::collections::HashMap<PlayerId, PlayerMatchScore> = raw
+                let participation_by_player: std::collections::HashMap<PlayerId, ParticipationStatus> = raw
                     .team_a
                     .iter()
                     .chain(raw.team_b.iter())
-                    .filter_map(|(name, goals)| {
+                    .filter_map(|participant| {
                         name_to_id
-                            .get(name)
-                            .map(|&id| (id, PlayerMatchScore { goals: *goals }))
+                            .get(&participant.name)
+                            .map(|&id| (id, participant.participation_status))
                     })
                     .collect();
+                let player_points: std::collections::HashMap<PlayerId, u16> = raw
+                    .team_a
+                    .iter()
+                    .chain(raw.team_b.iter())
+                    .filter_map(|participant| {
+                        name_to_id.get(&participant.name).and_then(|&id| {
+                            participant.player_points.map(|points| (id, points))
+                        })
+                    })
+                    .collect();
+                let duration_multiplier =
+                    crate::models::clamp_duration_multiplier(raw.duration_multiplier);
+                let match_result = match score_entry_mode {
+                    ScoreEntryMode::PointsPerPlayer => MatchResult::new_points_per_player(
+                        mid,
+                        participation_by_player,
+                        player_points,
+                        duration_multiplier,
+                        Role::Coach,
+                    ),
+                    ScoreEntryMode::PointsPerTeam => {
+                        let team_a_points = raw.team_a_points.unwrap_or_else(|| {
+                            raw.team_a
+                                .iter()
+                                .filter(|participant| participant.participation_status.played())
+                                .filter_map(|participant| participant.player_points)
+                                .sum()
+                        });
+                        let team_b_points = raw.team_b_points.unwrap_or_else(|| {
+                            raw.team_b
+                                .iter()
+                                .filter(|participant| participant.participation_status.played())
+                                .filter_map(|participant| participant.player_points)
+                                .sum()
+                        });
+                        MatchResult::new_points_per_team(
+                            mid,
+                            participation_by_player,
+                            team_a_points,
+                            team_b_points,
+                            duration_multiplier,
+                            Role::Coach,
+                        )
+                    }
+                    ScoreEntryMode::WinDrawLose => {
+                        let outcome = raw.outcome.unwrap_or_else(|| {
+                            let team_a_points = raw.team_a_points.unwrap_or(0);
+                            let team_b_points = raw.team_b_points.unwrap_or(0);
+                            if team_a_points > team_b_points {
+                                MatchOutcome::TeamAWin
+                            } else if team_b_points > team_a_points {
+                                MatchOutcome::TeamBWin
+                            } else {
+                                MatchOutcome::Draw
+                            }
+                        });
+                        MatchResult::new_win_draw_lose(
+                            mid,
+                            participation_by_player,
+                            outcome,
+                            duration_multiplier,
+                            Role::Coach,
+                        )
+                    }
+                };
 
                 to_score.push((
                     mid,
-                    MatchResult {
-                        match_id: mid,
-                        scores,
-                        duration_multiplier: crate::models::clamp_duration_multiplier(
-                            raw.duration_multiplier,
-                        ),
-                        entered_by: Role::Coach,
-                    },
+                    match_result,
                 ));
             }
 

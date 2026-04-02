@@ -582,7 +582,7 @@ pub fn PlayerPage() -> impl IntoView {
                                     .collect();
 
                                 if past.is_empty() {
-                                    view! {}.into_any()
+                                    ().into_any()
                                 } else {
                                     past.sort_by(|a, b| {
                                         b.round.0.cmp(&a.round.0).then(a.field.cmp(&b.field))
@@ -594,11 +594,10 @@ pub fn PlayerPage() -> impl IntoView {
                                     struct PastCard {
                                         rnd: u32,
                                         field: u8,
-                                        my_score: u16,
-                                        opp_score: u16,
+                                        scoreline: String,
                                         my_names: Vec<String>,
                                         opp_names: Vec<String>,
-                                        my_goals: Option<u16>,
+                                        my_individual_points: Option<u16>,
                                     }
 
                                     let cards: Vec<PastCard> = past
@@ -611,18 +610,25 @@ pub fn PlayerPage() -> impl IntoView {
                                                 if on_team_a { &m.team_a } else { &m.team_b };
                                             let opp_side =
                                                 if on_team_a { &m.team_b } else { &m.team_a };
-                                            let my_score: u16 = my_side
-                                                .iter()
-                                                .filter_map(|id| {
-                                                    result.scores.get(id).and_then(|s| s.goals)
-                                                })
-                                                .sum();
-                                            let opp_score: u16 = opp_side
-                                                .iter()
-                                                .filter_map(|id| {
-                                                    result.scores.get(id).and_then(|s| s.goals)
-                                                })
-                                                .sum();
+                                            let scoreline = if let Some((team_a_points, team_b_points)) =
+                                                result.numeric_team_points(m)
+                                            {
+                                                if on_team_a {
+                                                    format!("{team_a_points} – {team_b_points}")
+                                                } else {
+                                                    format!("{team_b_points} – {team_a_points}")
+                                                }
+                                            } else {
+                                                match &result.score_payload {
+                                                    app_core::models::MatchScorePayload::WinDrawLose { outcome } => match (on_team_a, outcome) {
+                                                        (true, app_core::models::MatchOutcome::TeamAWin)
+                                                        | (false, app_core::models::MatchOutcome::TeamBWin) => "Win".to_string(),
+                                                        (_, app_core::models::MatchOutcome::Draw) => "Draw".to_string(),
+                                                        _ => "Loss".to_string(),
+                                                    },
+                                                    _ => "No score".to_string(),
+                                                }
+                                            };
                                             let my_names: Vec<_> = my_side
                                                 .iter()
                                                 .filter_map(|id| {
@@ -635,18 +641,15 @@ pub fn PlayerPage() -> impl IntoView {
                                                     state.players.get(id).map(|p| p.name.clone())
                                                 })
                                                 .collect();
-                                            let my_goals = result
-                                                .scores
-                                                .get(&selected_id)
-                                                .and_then(|s| s.goals);
+                                            let my_individual_points =
+                                                result.individual_points_for_player(&selected_id);
                                             Some(PastCard {
                                                 rnd: m.round.0,
                                                 field: m.field,
-                                                my_score,
-                                                opp_score,
+                                                scoreline,
                                                 my_names,
                                                 opp_names,
-                                                my_goals,
+                                                my_individual_points,
                                             })
                                         })
                                         .collect();
@@ -684,7 +687,7 @@ pub fn PlayerPage() -> impl IntoView {
                                                                     </span>
                                                                 </div>
                                                                 <span class="text-sm font-bold text-white tabular-nums">
-                                                                    {c.my_score}" – "{c.opp_score}
+                                                                    {c.scoreline}
                                                                 </span>
                                                             </div>
                                                             <div class="flex items-center gap-4">
@@ -706,10 +709,10 @@ pub fn PlayerPage() -> impl IntoView {
                                                                     }).collect_view()}
                                                                 </div>
                                                             </div>
-                                                            {c.my_goals.map(|g| view! {
+                                                            {c.my_individual_points.map(|points| view! {
                                                                 <p class="mt-2 text-xs text-gray-500 \
                                                                           text-center">
-                                                                    "Your goals: "{g}
+                                                                    "Your points: "{points}
                                                                 </p>
                                                             })}
                                                         </div>

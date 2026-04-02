@@ -93,8 +93,8 @@ impl TrivariateEngine {
         // Single pass over results instead of one scan per player.
         let mut play_counts: HashMap<PlayerId, u32> = HashMap::new();
         for r in results {
-            for (pid, score) in &r.scores {
-                if score.played() {
+            for (pid, participation_status) in &r.participation_by_player {
+                if participation_status.played() {
                     *play_counts.entry(*pid).or_insert(0) += 1;
                 }
             }
@@ -237,10 +237,15 @@ fn grad_hessian(
         // Look up team assignments for this match
         let scheduled = match_lookup.get(&result.match_id);
 
-        for (player_id, score) in &result.scores {
-            let k = match score.goals {
-                Some(g) => g as f64,
-                None => continue,
+        for (player_id, participation_status) in &result.participation_by_player {
+            if !participation_status.played() {
+                continue;
+            }
+            let Some(k) = result
+                .individual_points_for_player(player_id)
+                .map(|points| points as f64)
+            else {
+                continue;
             };
             let Some(&i) = player_index.get(player_id) else {
                 continue;
@@ -347,15 +352,21 @@ mod tests {
     }
 
     fn make_result(match_id: u32, scores: Vec<(u32, u16)>) -> MatchResult {
-        MatchResult {
-            match_id: MatchId(match_id),
-            scores: scores
-                .into_iter()
-                .map(|(pid, g)| (PlayerId(pid), PlayerMatchScore::scored(g)))
-                .collect(),
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        }
+        let participation_by_player = scores
+            .iter()
+            .map(|(pid, _)| (PlayerId(*pid), ParticipationStatus::Played))
+            .collect();
+        let player_points = scores
+            .into_iter()
+            .map(|(pid, points)| (PlayerId(pid), points))
+            .collect();
+        MatchResult::new_points_per_player(
+            MatchId(match_id),
+            participation_by_player,
+            player_points,
+            1.0,
+            Role::Coach,
+        )
     }
 
     #[test]

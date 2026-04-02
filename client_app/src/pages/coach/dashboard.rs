@@ -3,6 +3,7 @@ use super::schedule_export::{
     share_round_schedule_image, RoundScheduleImageShareOutcome,
 };
 use super::match_player_sheet::RoundPlayerChangeSheet;
+use crate::pages::score_entry::SharedScoreEntryCard;
 use crate::coach_sync::pull_assistant_score_events;
 use crate::meta::use_page_meta;
 use crate::state::{load_session, save_session, AppContext};
@@ -17,7 +18,9 @@ use crate::sync::{
 ///   /coach/session/:id/:tab      → explicit tab (matches | results | analysis | online | players)
 use app_core::events::{materialize, Event};
 use app_core::io::csv::{self, import_rankings};
-use app_core::models::{MatchId, MatchResult, MatchStatus, PlayerId, PlayerMatchScore, Role};
+use app_core::models::{
+    MatchId, MatchOutcome, MatchResult, MatchStatus, PlayerId, Role, ScoreEntryMode,
+};
 use app_core::ranking::goal_model::GoalModelEngine;
 use app_core::ranking::RankingEngine;
 use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
@@ -531,14 +534,6 @@ pub fn MatchesTab() -> impl IntoView {
 // RESULTS TAB
 // ══════════════════════════════════════════════════════════════════════════════
 
-const DURATION_OPTIONS: &[(f64, &str)] = &[
-    (0.5, "½ match"),
-    (0.75, "¾ match"),
-    (1.0, "Full"),
-    (1.25, "1¼×"),
-    (1.5, "1½×"),
-];
-
 /// Read-only summary card for a completed match result.
 #[component]
 fn MatchResultSummaryCard(
@@ -549,14 +544,28 @@ fn MatchResultSummaryCard(
     player_names: HashMap<PlayerId, String>,
     result: MatchResult,
 ) -> impl IntoView {
-    let score_a: u16 = team_a
-        .iter()
-        .filter_map(|id| result.scores.get(id).and_then(|s| s.goals))
-        .sum();
-    let score_b: u16 = team_b
-        .iter()
-        .filter_map(|id| result.scores.get(id).and_then(|s| s.goals))
-        .sum();
+    let scheduled_match = app_core::models::ScheduledMatch {
+        id: result.match_id,
+        round: app_core::models::RoundNumber(round),
+        field,
+        team_a: team_a.clone(),
+        team_b: team_b.clone(),
+        status: MatchStatus::Completed,
+    };
+    let scoreline = if let Some((team_a_points, team_b_points)) =
+        result.numeric_team_points(&scheduled_match)
+    {
+        format!("{team_a_points} – {team_b_points}")
+    } else {
+        match &result.score_payload {
+            app_core::models::MatchScorePayload::WinDrawLose { outcome } => match outcome {
+                MatchOutcome::TeamAWin => "Team A win".to_string(),
+                MatchOutcome::Draw => "Draw".to_string(),
+                MatchOutcome::TeamBWin => "Team B win".to_string(),
+            },
+            _ => "No score".to_string(),
+        }
+    };
     let all_ids: Vec<PlayerId> = team_a.iter().chain(team_b.iter()).cloned().collect();
     let show_duration = (result.duration_multiplier - 1.0).abs() > 0.01;
     let duration_pct = (result.duration_multiplier * 100.0).round() as u32;
@@ -568,7 +577,7 @@ fn MatchResultSummaryCard(
                     "Field "{field}" · Rd "{round}
                 </span>
                 <span class="text-xs font-bold text-gray-200">
-                    {score_a}" – "{score_b}
+                    {scoreline}
                 </span>
             </div>
             <div class="px-4 py-3 space-y-1.5">
@@ -576,7 +585,19 @@ fn MatchResultSummaryCard(
                     let name = player_names.get(&pid).cloned()
                         .unwrap_or_else(|| format!("Player {}", pid.0));
                     let on_team_a = team_a.contains(&pid);
-                    let goals = result.scores.get(&pid).and_then(|s| s.goals);
+                    let score_label = match result.score_entry_mode() {
+                        ScoreEntryMode::PointsPerPlayer => result
+                            .individual_points_for_player(&pid)
+                            .map(|points| points.to_string())
+                            .unwrap_or_else(|| "DNP".to_string()),
+                        _ => {
+                            if result.player_played(&pid) {
+                                "Played".to_string()
+                            } else {
+                                "DNP".to_string()
+                            }
+                        }
+                    };
                     view! {
                         <div class="flex items-center gap-2">
                             <span class=move || format!(
@@ -585,10 +606,7 @@ fn MatchResultSummaryCard(
                             )/>
                             <span class="flex-1 text-sm text-white truncate">{name}</span>
                             <span class="text-sm text-gray-400 font-medium tabular-nums">
-                                {match goals {
-                                    None => "DNP".to_string(),
-                                    Some(g) => g.to_string(),
-                                }}
+                                {score_label}
                             </span>
                         </div>
                     }
@@ -612,149 +630,25 @@ fn MatchScoreCard(
     team_b: Vec<PlayerId>,
     player_names: HashMap<PlayerId, String>,
     existing_result: Option<MatchResult>,
+    score_entry_mode: ScoreEntryMode,
     on_submit: impl Fn(MatchResult) + 'static + Clone,
 ) -> impl IntoView {
-    let all_ids: Vec<PlayerId> = team_a.iter().chain(team_b.iter()).cloned().collect();
-
-    let init: HashMap<PlayerId, Option<u16>> = all_ids
-        .iter()
-        .map(|id| {
-            let goals = existing_result
-                .as_ref()
-                .and_then(|r| r.scores.get(id))
-                .and_then(|s| s.goals);
-            (*id, goals)
-        })
-        .collect();
-
-    let init_multiplier = existing_result
-        .as_ref()
-        .map(|r| r.duration_multiplier)
-        .unwrap_or(1.0);
-
-    let draft = RwSignal::new(init);
-    let duration_mult = RwSignal::new(init_multiplier);
-    let is_saved = RwSignal::new(existing_result.is_some());
-
     view! {
-        <div class="bg-gray-900 border border-gray-700/50 rounded-xl overflow-hidden">
-            // Header
-            <div class="px-4 pt-4 pb-3 border-b border-gray-700/30 flex items-center justify-between">
-                <span class="text-sm font-semibold text-white">
-                    "Field "{field}" · Rd "{round}
-                </span>
-                {move || is_saved.get().then(|| view! {
-                    <span class="text-xs text-green-400 font-medium">"Saved ✓"</span>
-                })}
-            </div>
-
-            // Player score rows
-            <div class="px-4 py-3 space-y-3">
-                {all_ids.iter().map(|&pid| {
-                    let name = player_names.get(&pid).cloned()
-                        .unwrap_or_else(|| format!("Player {}", pid.0));
-                    let on_team_a = team_a.contains(&pid);
-                    view! {
-                        <div class="flex items-center gap-2 flex-wrap">
-                            <span class=move || format!(
-                                "w-2 h-2 rounded-full shrink-0 {}",
-                                if on_team_a { "bg-blue-400" } else { "bg-orange-400" }
-                            )/>
-                            <span class="flex-1 min-w-[80px] text-sm text-white truncate">{name}</span>
-                            <div class="flex gap-1 flex-wrap">
-                                <button
-                                    class=move || {
-                                        let active = draft.with(|d| d.get(&pid).copied().flatten().is_none());
-                                        format!(
-                                            "px-2 py-1 rounded min-h-[36px] min-w-[40px] text-xs {}",
-                                            if active { "bg-gray-600 text-white font-semibold" }
-                                            else { "bg-gray-800 text-gray-400 hover:bg-gray-700" }
-                                        )
-                                    }
-                                    on:click=move |_| { draft.update(|d| { d.insert(pid, None); }); }
-                                >
-                                    "DNP"
-                                </button>
-                                {(0u16..=9).map(|n| {
-                                    view! {
-                                        <button
-                                            class=move || {
-                                                let active = draft.with(|d| *d.get(&pid).unwrap_or(&None) == Some(n));
-                                                format!(
-                                                    "px-2 py-1 rounded min-h-[36px] min-w-[32px] \
-                                                     font-semibold text-sm {}",
-                                                    if active { "bg-blue-600 text-white" }
-                                                    else { "bg-gray-800 text-gray-400 hover:bg-gray-700" }
-                                                )
-                                            }
-                                            on:click=move |_| {
-                                                draft.update(|d| { d.insert(pid, Some(n)); });
-                                            }
-                                        >
-                                            {n}
-                                        </button>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        </div>
-                    }
-                }).collect_view()}
-            </div>
-
-            // Duration multiplier
-            <div class="px-4 pb-3 border-t border-gray-700/20 pt-3">
-                <p class="text-xs text-gray-500 mb-2">"Match duration"</p>
-                <div class="flex gap-1 flex-wrap">
-                    {DURATION_OPTIONS.iter().map(|&(val, label)| {
-                        view! {
-                            <button
-                                class=move || {
-                                    let active = (duration_mult.get() - val).abs() < 0.01;
-                                    format!(
-                                        "px-3 py-1 rounded text-xs font-medium min-h-[32px] \
-                                         transition-colors {}",
-                                        if active { "bg-blue-600 text-white" }
-                                        else { "bg-gray-800 text-gray-400 hover:bg-gray-700" }
-                                    )
-                                }
-                                on:click=move |_| duration_mult.set(val)
-                            >
-                                {label}
-                            </button>
-                        }
-                    }).collect_view()}
-                </div>
-            </div>
-
-            // Save button
-            <div class="px-4 pb-4">
-                <button
-                    class="w-full py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 \
-                           text-white font-semibold rounded-lg transition-colors min-h-[48px]"
-                    on:click={
-                        let on_submit = on_submit;
-                        let all_ids = all_ids.clone();
-                        move |_| {
-                            let scores: HashMap<_, _> = draft.with(|d| {
-                                all_ids.iter().map(|id| {
-                                    (*id, PlayerMatchScore { goals: *d.get(id).unwrap_or(&None) })
-                                }).collect()
-                            });
-                            let mult = duration_mult.get_untracked();
-                            on_submit(MatchResult {
-                                match_id,
-                                scores,
-                                duration_multiplier: mult,
-                                entered_by: Role::Coach,
-                            });
-                            is_saved.set(true);
-                        }
-                    }
-                >
-                    "Save Scores"
-                </button>
-            </div>
-        </div>
+        <SharedScoreEntryCard
+            match_id=match_id
+            field=field
+            round=round
+            team_a=team_a
+            team_b=team_b
+            player_names=player_names
+            score_entry_mode=score_entry_mode
+            existing_result=existing_result
+            entered_by=Role::Coach
+            on_submit=on_submit
+            show_duration_picker=true
+            submit_label="Save Scores"
+            saved_label="Saved ✓"
+        />
     }
 }
 
@@ -834,6 +728,12 @@ pub fn ResultsTab() -> impl IntoView {
                     .filter(|m| m.round.0 == round && m.status != MatchStatus::Voided)
                     .collect();
                 matches.sort_by_key(|m| m.field);
+                let score_entry_mode = manager
+                    .state
+                    .config
+                    .as_ref()
+                    .map(|config| config.score_entry_mode)
+                    .unwrap_or(ScoreEntryMode::PointsPerPlayer);
 
                 if matches.is_empty() {
                     view! {
@@ -867,6 +767,7 @@ pub fn ResultsTab() -> impl IntoView {
                                         team_b=team_b
                                         player_names=pnames
                                         existing_result=existing
+                                        score_entry_mode=score_entry_mode
                                         on_submit=submit
                                     />
                                 }
@@ -881,12 +782,12 @@ pub fn ResultsTab() -> impl IntoView {
                 let session_opt = ctx.session.get();
                 let manager = match session_opt.as_ref() {
                     Some(m) => m,
-                    None => return view! {}.into_any(),
+                    None => return ().into_any(),
                 };
 
                 let round = manager.state.current_round.0;
                 if round <= 1 {
-                    return view! {}.into_any();
+                    return ().into_any();
                 }
 
                 let player_names: HashMap<_, _> = manager
@@ -904,7 +805,7 @@ pub fn ResultsTab() -> impl IntoView {
                     .collect();
 
                 if past.is_empty() {
-                    return view! {}.into_any();
+                    return ().into_any();
                 }
 
                 past.sort_by(|a, b| a.round.0.cmp(&b.round.0).then(a.field.cmp(&b.field)));
@@ -1043,6 +944,22 @@ fn analysis_sub_tab_class(active: bool) -> &'static str {
     }
 }
 
+fn supports_adt_analysis(config: &app_core::models::SessionConfig) -> bool {
+    config.score_entry_mode == ScoreEntryMode::PointsPerPlayer
+}
+
+fn supports_synergy_analysis(config: &app_core::models::SessionConfig) -> bool {
+    config.score_entry_mode != ScoreEntryMode::WinDrawLose && config.team_size >= 2
+}
+
+fn overall_score_stat_label(score_entry_mode: ScoreEntryMode) -> &'static str {
+    match score_entry_mode {
+        ScoreEntryMode::PointsPerPlayer => "Pts",
+        ScoreEntryMode::PointsPerTeam => "Team Pts",
+        ScoreEntryMode::WinDrawLose => "WDL Pts",
+    }
+}
+
 #[component]
 pub fn AnalysisTab() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext missing");
@@ -1115,10 +1032,32 @@ pub fn AnalysisTab() -> impl IntoView {
             <div class="flex items-center gap-2">
                 <button class=move || analysis_sub_tab_class(sub_tab.get() == "overall")
                     on:click=move |_| sub_tab.set("overall")>"Overall"</button>
-                <button class=move || analysis_sub_tab_class(sub_tab.get() == "adt")
-                    on:click=move |_| sub_tab.set("adt")>"A/D/T"</button>
-                <button class=move || analysis_sub_tab_class(sub_tab.get() == "synergy")
-                    on:click=move |_| sub_tab.set("synergy")>"Synergy"</button>
+                {move || {
+                    let show_adt = ctx.session.with(|session| {
+                        session
+                            .as_ref()
+                            .and_then(|manager| manager.state.config.as_ref())
+                            .map(supports_adt_analysis)
+                            .unwrap_or(false)
+                    });
+                    show_adt.then(|| view! {
+                        <button class=move || analysis_sub_tab_class(sub_tab.get() == "adt")
+                            on:click=move |_| sub_tab.set("adt")>"A/D/T"</button>
+                    })
+                }}
+                {move || {
+                    let show_synergy = ctx.session.with(|session| {
+                        session
+                            .as_ref()
+                            .and_then(|manager| manager.state.config.as_ref())
+                            .map(supports_synergy_analysis)
+                            .unwrap_or(false)
+                    });
+                    show_synergy.then(|| view! {
+                        <button class=move || analysis_sub_tab_class(sub_tab.get() == "synergy")
+                            on:click=move |_| sub_tab.set("synergy")>"Synergy"</button>
+                    })
+                }}
             </div>
 
             {move || {
@@ -1132,10 +1071,19 @@ pub fn AnalysisTab() -> impl IntoView {
                 let player_map = manager.state.players.clone();
                 let results_count = manager.state.results.len();
                 let config = manager.state.config.clone();
+                let supports_adt = config.as_ref().map(supports_adt_analysis).unwrap_or(false);
+                let supports_synergy = config.as_ref().map(supports_synergy_analysis).unwrap_or(false);
                 let tab = sub_tab.get();
 
                 match tab {
                     "adt" => {
+                        if !supports_adt {
+                            return view! {
+                                <div class="text-center py-8 text-gray-400">
+                                    <p class="font-medium">"A/D/T is only available for Points Per Player sessions."</p>
+                                </div>
+                            }.into_any();
+                        }
                         // Attack / Defense / Teamwork
                         let players: Vec<_> = manager.state.players.values().cloned().collect();
                         let completed_results: Vec<_> = manager.state.results.values()
@@ -1229,6 +1177,13 @@ pub fn AnalysisTab() -> impl IntoView {
                     }
 
                     "synergy" => {
+                        if !supports_synergy {
+                            return view! {
+                                <div class="text-center py-8 text-gray-400">
+                                    <p class="font-medium">"Synergy needs team play with numeric scoring."</p>
+                                </div>
+                            }.into_any();
+                        }
                         let players: Vec<_> = manager.state.players.values().cloned().collect();
                         let completed_matches: Vec<_> = manager.state.matches.values()
                             .filter(|m| m.status == MatchStatus::Completed)
@@ -1385,7 +1340,7 @@ pub fn AnalysisTab() -> impl IntoView {
                         // "overall" tab (default)
                         let confidence_est = if !rankings.is_empty() {
                             let engine = GoalModelEngine::default();
-                            let config = config.unwrap().clone();
+                            let config = config.clone().unwrap();
                             Some(engine.estimated_rounds_to_confidence(&rankings, 3, &config))
                         } else { None };
 
@@ -1432,7 +1387,15 @@ pub fn AnalysisTab() -> impl IntoView {
                                     view! {
                                         <div class="space-y-4">
                                             <RankLane rankings=sorted.clone() player_map=player_map.clone()/>
-                                            <OverallTable rankings=sorted player_map=player_map/>
+                                            <OverallTable
+                                                rankings=sorted
+                                                player_map=player_map
+                                                score_label=overall_score_stat_label(
+                                                    config.as_ref()
+                                                        .map(|cfg| cfg.score_entry_mode)
+                                                        .unwrap_or(ScoreEntryMode::PointsPerPlayer)
+                                                )
+                                            />
                                             // CSV export
                                             <button
                                                 class="flex items-center gap-2 px-3 py-2 text-xs \
@@ -1565,6 +1528,11 @@ pub fn AnalysisTab() -> impl IntoView {
                                                     <OverallTable
                                                         rankings=csv_sorted
                                                         player_map=csv_player_map
+                                                        score_label=overall_score_stat_label(
+                                                            config.as_ref()
+                                                                .map(|cfg| cfg.score_entry_mode)
+                                                                .unwrap_or(ScoreEntryMode::PointsPerPlayer)
+                                                        )
                                                     />
                                                 </div>
                                             }
@@ -1596,6 +1564,7 @@ fn sub_rating_color(v: f64) -> &'static str {
 fn OverallTable(
     rankings: Vec<app_core::models::PlayerRanking>,
     player_map: HashMap<PlayerId, app_core::models::Player>,
+    score_label: &'static str,
 ) -> impl IntoView {
     view! {
         <div class="content-auto-table overflow-x-auto -mx-4 px-4">
@@ -1608,7 +1577,7 @@ fn OverallTable(
                         <th class="text-right py-2 pr-2 hidden sm:table-cell">"±"</th>
                         <th class="text-right py-2 pr-2">"Range"</th>
                         <th class="text-right py-2 pr-2 hidden sm:table-cell">"M"</th>
-                        <th class="text-right py-2">"G"</th>
+                        <th class="text-right py-2">{score_label}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1625,7 +1594,7 @@ fn OverallTable(
                         let rank_lo     = r.rank_range_90.0;
                         let rank_hi     = r.rank_range_90.1;
                         let played      = r.matches_played;
-                        let goals       = r.total_goals;
+                        let goals       = r.total_score;
                         let is_active   = r.is_active;
                         view! {
                             <tr class="border-b border-gray-800/50 hover:bg-gray-900/50">
@@ -1954,7 +1923,7 @@ pub fn PlayersTab() -> impl IntoView {
                             let is_active = p.status == app_core::models::PlayerStatus::Active;
                             let name = p.name.clone();
                             let rank_info = rankings_map.get(&pid).map(|r| {
-                                (r.rank, r.matches_played, r.total_goals)
+                                (r.rank, r.matches_played, r.total_score)
                             });
                             view! {
                                 <div class="content-auto-card bg-gray-900 border border-gray-700/50 \
@@ -1974,8 +1943,8 @@ pub fn PlayersTab() -> impl IntoView {
                                             {name.clone()}
                                         </p>
                                         <p class="text-xs text-gray-500">
-                                            {rank_info.map(|(rank, played, goals)| {
-                                                format!("Rank #{rank} · {played} matches · {goals} goals")
+                                            {rank_info.map(|(rank, played, score)| {
+                                                format!("Rank #{rank} · {played} matches · {score} score")
                                             }).unwrap_or_else(|| "No matches yet".to_string())}
                                         </p>
                                     </div>
@@ -2099,6 +2068,7 @@ pub fn OnlineTab() -> impl IntoView {
                         .collect();
                     Some(SessionArchive {
                         sport: config.sport.to_string(),
+                        score_entry_mode: config.score_entry_mode.to_string(),
                         team_size: config.team_size,
                         player_names,
                         final_rankings: if m.state.rankings.is_empty() {
