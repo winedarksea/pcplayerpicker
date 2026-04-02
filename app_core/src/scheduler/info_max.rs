@@ -17,6 +17,7 @@ use super::BenchBalanceTracker;
 use super::{ScheduleGenerationRequest, Scheduler};
 use crate::models::{
     MatchId, MatchStatus, Player, PlayerId, PlayerRanking, RoundNumber, ScheduledMatch,
+    SchedulingMethod,
 };
 use crate::rng::SessionRng;
 use std::collections::HashSet;
@@ -170,6 +171,7 @@ impl InfoMaxScheduler {
                     id: MatchId(*match_id_counter),
                     round,
                     field,
+                    scheduling_method: SchedulingMethod::InfoMaxV1,
                     team_a: best_matchup.team_a,
                     team_b: best_matchup.team_b,
                     status: MatchStatus::Scheduled,
@@ -283,6 +285,7 @@ mod tests {
             .enumerate()
             .map(|(i, (id, skill))| PlayerRanking {
                 player_id: PlayerId(*id),
+                ranking_method: crate::models::RankingMethod::GoalModelV1,
                 rating: *skill,
                 conservative_rating: *skill - 1.0,
                 uncertainty: 1.0,
@@ -440,6 +443,7 @@ mod tests {
             id: MatchId(11),
             round: RoundNumber(1),
             field: 1,
+            scheduling_method: SchedulingMethod::InfoMaxV1,
             team_a: vec![PlayerId(1), PlayerId(2)],
             team_b: vec![PlayerId(3), PlayerId(4)],
             status: MatchStatus::Completed,

@@ -115,6 +115,10 @@ pub struct SessionConfig {
     pub scheduling_frequency: u8,
     pub sport: Sport,
     #[serde(default)]
+    pub ranking_method: RankingMethod,
+    #[serde(default)]
+    pub scheduling_method: SchedulingMethod,
+    #[serde(default)]
     pub score_entry_mode: ScoreEntryMode,
     /// Fixed match duration in minutes (None = untimed)
     pub match_duration_minutes: Option<u16>,
@@ -140,6 +144,8 @@ impl SessionConfig {
             team_size,
             scheduling_frequency,
             sport,
+            ranking_method: RankingMethod::default(),
+            scheduling_method: SchedulingMethod::default(),
             score_entry_mode,
             match_duration_minutes: None,
             created_at: Utc::now(),
@@ -184,6 +190,38 @@ pub enum ScoreEntryMode {
     #[default]
     PointsPerPlayer,
     WinDrawLose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RankingMethod {
+    #[default]
+    GoalModelV1,
+}
+
+impl RankingMethod {
+    pub fn label(self) -> &'static str {
+        match self {
+            RankingMethod::GoalModelV1 => "Goal Model v1",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SchedulingMethod {
+    #[default]
+    AdaptiveV1,
+    RoundRobinV1,
+    InfoMaxV1,
+}
+
+impl SchedulingMethod {
+    pub fn label(self) -> &'static str {
+        match self {
+            SchedulingMethod::AdaptiveV1 => "Adaptive v1",
+            SchedulingMethod::RoundRobinV1 => "Round Robin v1",
+            SchedulingMethod::InfoMaxV1 => "Info Max v1",
+        }
+    }
 }
 
 impl std::fmt::Display for ScoreEntryMode {
@@ -315,6 +353,8 @@ pub struct ScheduledMatch {
     pub id: MatchId,
     pub round: RoundNumber,
     pub field: u8,
+    #[serde(default)]
+    pub scheduling_method: SchedulingMethod,
     pub team_a: Vec<PlayerId>,
     pub team_b: Vec<PlayerId>,
     pub status: MatchStatus,
@@ -746,6 +786,8 @@ impl From<MatchResult> for MatchResultSerde {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerRanking {
     pub player_id: PlayerId,
+    #[serde(default)]
+    pub ranking_method: RankingMethod,
     /// Posterior mean skill (log-scale)
     pub rating: f64,
     /// Conservative display score: posterior mean minus a fixed uncertainty penalty.
@@ -784,6 +826,7 @@ pub struct SessionState {
     pub matches: HashMap<MatchId, ScheduledMatch>,
     pub results: HashMap<MatchId, MatchResult>,
     pub rankings: Vec<PlayerRanking>,
+    pub latest_ranking_method: Option<RankingMethod>,
     pub current_round: RoundNumber,
 }
 

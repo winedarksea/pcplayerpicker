@@ -1,6 +1,7 @@
 use crate::models::{
     EventId, MatchId, MatchResult, MatchStatus, Player, PlayerId, PlayerRanking, PlayerStatus,
-    Role, RoundNumber, ScheduledMatch, SessionConfig, SessionState,
+    RankingMethod, Role, RoundNumber, ScheduledMatch, SchedulingMethod, SessionConfig,
+    SessionState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,8 @@ pub enum Event {
     },
     ScheduleGenerated {
         round: RoundNumber,
+        #[serde(default)]
+        method: SchedulingMethod,
         matches: Vec<ScheduledMatch>,
     },
     ScoreEntered {
@@ -58,6 +61,8 @@ pub enum Event {
     },
     RankingsComputed {
         round: RoundNumber,
+        #[serde(default)]
+        method: RankingMethod,
         rankings: Vec<PlayerRanking>,
     },
 }
@@ -207,7 +212,11 @@ fn apply_event(state: &mut SessionState, event: &Event, entered_by: &Role) {
             }
         }
 
-        Event::ScheduleGenerated { round, matches } => {
+        Event::ScheduleGenerated {
+            round,
+            method: _,
+            matches,
+        } => {
             state.current_round = *round;
             for m in matches {
                 state.matches.insert(m.id, m.clone());
@@ -279,8 +288,11 @@ fn apply_event(state: &mut SessionState, event: &Event, entered_by: &Role) {
             }
         }
 
-        Event::RankingsComputed { rankings, .. } => {
+        Event::RankingsComputed {
+            rankings, method, ..
+        } => {
             state.rankings = rankings.clone();
+            state.latest_ranking_method = Some(*method);
         }
     }
 }
@@ -457,11 +469,13 @@ mod tests {
         log.append(
             Event::ScheduleGenerated {
                 round: RoundNumber(1),
+                method: SchedulingMethod::RoundRobinV1,
                 matches: vec![
                     ScheduledMatch {
                         id: MatchId(1),
                         round: RoundNumber(1),
                         field: 1,
+                        scheduling_method: SchedulingMethod::RoundRobinV1,
                         team_a: vec![PlayerId(1)],
                         team_b: vec![PlayerId(2)],
                         status: MatchStatus::Scheduled,
@@ -470,6 +484,7 @@ mod tests {
                         id: MatchId(2),
                         round: RoundNumber(2),
                         field: 1,
+                        scheduling_method: SchedulingMethod::RoundRobinV1,
                         team_a: vec![PlayerId(1)],
                         team_b: vec![PlayerId(2)],
                         status: MatchStatus::Scheduled,
@@ -512,10 +527,12 @@ mod tests {
         log.append(
             Event::ScheduleGenerated {
                 round: RoundNumber(1),
+                method: SchedulingMethod::RoundRobinV1,
                 matches: vec![ScheduledMatch {
                     id: MatchId(1),
                     round: RoundNumber(1),
                     field: 1,
+                    scheduling_method: SchedulingMethod::RoundRobinV1,
                     team_a: vec![PlayerId(1)],
                     team_b: vec![PlayerId(2)],
                     status: MatchStatus::Scheduled,

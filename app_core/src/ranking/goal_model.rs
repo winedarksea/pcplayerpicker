@@ -15,8 +15,8 @@
 
 use super::RankingEngine;
 use crate::models::{
-    MatchId, MatchResult, MatchScorePayload, Player, PlayerId, PlayerRanking, ScheduledMatch,
-    SessionConfig,
+    MatchId, MatchResult, MatchScorePayload, Player, PlayerId, PlayerRanking, RankingMethod,
+    ScheduledMatch, SessionConfig,
 };
 use nalgebra::{DMatrix, DVector};
 use std::collections::HashMap;
@@ -516,6 +516,7 @@ impl RankingEngine for GoalModelEngine {
             .iter()
             .map(|p| PlayerRanking {
                 player_id: p.id,
+                ranking_method: RankingMethod::GoalModelV1,
                 rating: 0.0,
                 conservative_rating: Self::conservative_rating(0.0, prior_var.sqrt()),
                 uncertainty: prior_var.sqrt(),
@@ -552,6 +553,7 @@ impl RankingEngine for GoalModelEngine {
                 let Some(&idx) = player_index.get(&player.id) else {
                     return PlayerRanking {
                         player_id: player.id,
+                        ranking_method: RankingMethod::GoalModelV1,
                         rating: 0.0,
                         conservative_rating: Self::conservative_rating(0.0, prior_var.sqrt()),
                         uncertainty: prior_var.sqrt(),
@@ -632,6 +634,7 @@ impl RankingEngine for GoalModelEngine {
 
                 PlayerRanking {
                     player_id: player.id,
+                    ranking_method: RankingMethod::GoalModelV1,
                     rating: theta_mean,
                     conservative_rating: Self::conservative_rating(theta_mean, theta_uncertainty),
                     uncertainty: theta_uncertainty,
@@ -786,6 +789,7 @@ mod tests {
             id: MatchId(match_id),
             round: RoundNumber(1),
             field: 1,
+            scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
             team_a: team_a.into_iter().map(PlayerId).collect(),
             team_b: team_b.into_iter().map(PlayerId).collect(),
             status: MatchStatus::Completed,
@@ -856,6 +860,7 @@ mod tests {
                 id: MatchId(1),
                 round: RoundNumber(1),
                 field: 1,
+                scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(1), PlayerId(2)],
                 team_b: vec![PlayerId(3), PlayerId(4)],
                 status: crate::models::MatchStatus::Completed,
@@ -864,6 +869,7 @@ mod tests {
                 id: MatchId(2),
                 round: RoundNumber(1),
                 field: 2,
+                scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(5), PlayerId(6)],
                 team_b: vec![PlayerId(7), PlayerId(8)],
                 status: crate::models::MatchStatus::Completed,
@@ -1231,6 +1237,7 @@ mod tests {
                 id: MatchId(1),
                 round: RoundNumber(1),
                 field: 1,
+                scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(1)],
                 team_b: vec![PlayerId(3)],
                 status: MatchStatus::Completed,
@@ -1239,6 +1246,7 @@ mod tests {
                 id: MatchId(2),
                 round: RoundNumber(2),
                 field: 1,
+                scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(2)],
                 team_b: vec![PlayerId(3)],
                 status: MatchStatus::Completed,
@@ -1247,6 +1255,7 @@ mod tests {
                 id: MatchId(3),
                 round: RoundNumber(3),
                 field: 1,
+                scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(2)],
                 team_b: vec![PlayerId(3)],
                 status: MatchStatus::Completed,
@@ -1255,6 +1264,7 @@ mod tests {
                 id: MatchId(4),
                 round: RoundNumber(4),
                 field: 1,
+                scheduling_method: crate::models::SchedulingMethod::RoundRobinV1,
                 team_a: vec![PlayerId(2)],
                 team_b: vec![PlayerId(3)],
                 status: MatchStatus::Completed,

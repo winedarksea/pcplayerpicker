@@ -73,9 +73,12 @@ impl SessionManager {
             .unwrap_or(ScoreEntryMode::PointsPerPlayer);
 
         let mut config = SessionConfig::new(team_size, scheduling_frequency, sport);
+        config.ranking_method = imported.ranking_method.unwrap_or_default();
+        config.scheduling_method = imported.scheduling_method.unwrap_or_default();
         config.score_entry_mode = score_entry_mode;
         config.match_duration_minutes = imported.match_duration_minutes;
 
+        let scheduling_method = config.scheduling_method;
         let mut manager = SessionManager::new(config);
 
         // Register all players; build name→id lookup.
@@ -124,6 +127,7 @@ impl SessionManager {
                     id: mid,
                     round: RoundNumber(round_num),
                     field: (field as u8) + 1,
+                    scheduling_method,
                     team_a: team_a.clone(),
                     team_b: team_b.clone(),
                     status: MatchStatus::Scheduled,
@@ -215,6 +219,7 @@ impl SessionManager {
             manager.log.append(
                 Event::ScheduleGenerated {
                     round: RoundNumber(round_num),
+                    method: scheduling_method,
                     matches: scheduled,
                 },
                 Role::Coach,

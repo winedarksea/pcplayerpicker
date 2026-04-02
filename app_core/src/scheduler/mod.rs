@@ -2,7 +2,9 @@ pub mod info_max;
 pub(crate) mod match_candidate;
 pub mod round_robin;
 
-use crate::models::{Player, PlayerId, PlayerRanking, RoundNumber, ScheduledMatch, SessionConfig};
+use crate::models::{
+    Player, PlayerId, PlayerRanking, RoundNumber, ScheduledMatch, SchedulingMethod, SessionConfig,
+};
 use crate::rng::SessionRng;
 use std::collections::{HashMap, HashSet};
 
@@ -25,14 +27,34 @@ pub trait Scheduler {
     fn generate_schedule(&self, request: ScheduleGenerationRequest<'_>) -> Vec<ScheduledMatch>;
 }
 
-/// Factory: select the appropriate scheduler based on session state.
-/// - No rankings yet (cold start): round-robin for balanced initial matchups.
-/// - Rankings available: info-maximizing scheduler.
-pub fn select_scheduler(rankings: &[PlayerRanking]) -> Box<dyn Scheduler> {
-    if rankings.is_empty() || rankings.iter().all(|r| r.matches_played == 0) {
-        Box::new(round_robin::RoundRobinScheduler)
-    } else {
-        Box::new(info_max::InfoMaxScheduler)
+/// Factory: resolve the configured scheduling family to the concrete algorithm
+/// used for this generation step.
+pub fn select_scheduler(
+    config: &SessionConfig,
+    rankings: &[PlayerRanking],
+) -> (SchedulingMethod, Box<dyn Scheduler>) {
+    match config.scheduling_method {
+        SchedulingMethod::AdaptiveV1 => {
+            if rankings.is_empty() || rankings.iter().all(|r| r.matches_played == 0) {
+                (
+                    SchedulingMethod::RoundRobinV1,
+                    Box::new(round_robin::RoundRobinScheduler),
+                )
+            } else {
+                (
+                    SchedulingMethod::InfoMaxV1,
+                    Box::new(info_max::InfoMaxScheduler),
+                )
+            }
+        }
+        SchedulingMethod::RoundRobinV1 => (
+            SchedulingMethod::RoundRobinV1,
+            Box::new(round_robin::RoundRobinScheduler),
+        ),
+        SchedulingMethod::InfoMaxV1 => (
+            SchedulingMethod::InfoMaxV1,
+            Box::new(info_max::InfoMaxScheduler),
+        ),
     }
 }
 
@@ -192,6 +214,7 @@ mod tests {
             id: MatchId(1000),
             round: RoundNumber(1),
             field: 1,
+            scheduling_method: SchedulingMethod::RoundRobinV1,
             team_a: vec![PlayerId(1), PlayerId(2)],
             team_b: vec![PlayerId(3), PlayerId(4)],
             status: MatchStatus::Completed,

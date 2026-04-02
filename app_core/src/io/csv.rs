@@ -4,7 +4,7 @@
 
 use crate::models::{
     clamp_duration_multiplier, MatchId, MatchOutcome, MatchResult, ParticipationStatus, Player,
-    PlayerRanking, ScheduledMatch, ScoreEntryMode, SessionConfig,
+    PlayerRanking, RankingMethod, ScheduledMatch, SchedulingMethod, ScoreEntryMode, SessionConfig,
 };
 use std::collections::HashMap;
 use thiserror::Error;
@@ -43,6 +43,8 @@ pub struct RawImportedMatch {
 pub struct ImportedResults {
     pub sport: Option<String>,
     pub score_entry_mode: Option<ScoreEntryMode>,
+    pub ranking_method: Option<RankingMethod>,
+    pub scheduling_method: Option<SchedulingMethod>,
     pub team_size: Option<u8>,
     pub scheduling_frequency: Option<u8>,
     pub match_duration_minutes: Option<u16>,
@@ -155,6 +157,7 @@ fn parse_csv_records(csv: &str) -> CsvResult<Vec<Vec<String>>> {
 struct RankingCols {
     rank: usize,
     name: usize,
+    ranking_method: Option<usize>,
     rating: usize,
     conservative_rating: Option<usize>,
     uncertainty: usize,
@@ -171,15 +174,16 @@ impl RankingCols {
         Self {
             rank: 0,
             name: 1,
-            rating: 2,
-            conservative_rating: Some(3),
-            uncertainty: 4,
-            rank_lo: 5,
-            rank_hi: 6,
-            matches_played: 7,
-            total_score: 8,
-            prob_top_k: Some(9),
-            active: Some(10),
+            ranking_method: Some(2),
+            rating: 3,
+            conservative_rating: Some(4),
+            uncertainty: 5,
+            rank_lo: 6,
+            rank_hi: 7,
+            matches_played: 8,
+            total_score: 9,
+            prob_top_k: Some(10),
+            active: Some(11),
         }
     }
 }
@@ -202,6 +206,7 @@ fn parse_rankings_columns(header: &[String]) -> CsvResult<RankingCols> {
     Ok(RankingCols {
         rank: req(&["rank"], "rank")?,
         name: req(&["name"], "name")?,
+        ranking_method: header_index(header, &["ranking_method", "ranking_version"]),
         rating: req(&["rating"], "rating")?,
         conservative_rating: header_index(
             header,
@@ -249,6 +254,36 @@ fn parse_score_entry_mode(raw: &str) -> Option<ScoreEntryMode> {
     }
 }
 
+fn parse_ranking_method(raw: &str) -> Option<RankingMethod> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "goal_model_v1" | "goal model v1" => Some(RankingMethod::GoalModelV1),
+        _ => None,
+    }
+}
+
+fn ranking_method_csv_value(method: RankingMethod) -> &'static str {
+    match method {
+        RankingMethod::GoalModelV1 => "goal_model_v1",
+    }
+}
+
+fn parse_scheduling_method(raw: &str) -> Option<SchedulingMethod> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "adaptive_v1" | "adaptive v1" => Some(SchedulingMethod::AdaptiveV1),
+        "round_robin_v1" | "round robin v1" => Some(SchedulingMethod::RoundRobinV1),
+        "info_max_v1" | "info max v1" => Some(SchedulingMethod::InfoMaxV1),
+        _ => None,
+    }
+}
+
+fn scheduling_method_csv_value(method: SchedulingMethod) -> &'static str {
+    match method {
+        SchedulingMethod::AdaptiveV1 => "adaptive_v1",
+        SchedulingMethod::RoundRobinV1 => "round_robin_v1",
+        SchedulingMethod::InfoMaxV1 => "info_max_v1",
+    }
+}
+
 fn score_entry_mode_meta_label(score_entry_mode: ScoreEntryMode) -> &'static str {
     match score_entry_mode {
         ScoreEntryMode::PointsPerTeam => "points_per_team",
@@ -282,6 +317,7 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
         &[
             "rank".to_string(),
             "name".to_string(),
+            "ranking_method".to_string(),
             "rating".to_string(),
             "conservative_rating".to_string(),
             "uncertainty".to_string(),
@@ -307,6 +343,7 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
             &[
                 r.rank.to_string(),
                 name.to_string(),
+                ranking_method_csv_value(r.ranking_method).to_string(),
                 format!("{:.4}", r.rating),
                 format!("{:.4}", r.conservative_rating),
                 format!("{:.4}", r.uncertainty),
@@ -343,6 +380,14 @@ pub fn export_results(
     out.push_str(&format!(
         "# score_entry_mode: {}\n",
         score_entry_mode_meta_label(config.score_entry_mode)
+    ));
+    out.push_str(&format!(
+        "# ranking_method: {}\n",
+        ranking_method_csv_value(config.ranking_method)
+    ));
+    out.push_str(&format!(
+        "# scheduling_method: {}\n",
+        scheduling_method_csv_value(config.scheduling_method)
     ));
     out.push_str(&format!("# team_size: {}\n", config.team_size));
     out.push_str(&format!(
@@ -463,6 +508,8 @@ pub fn export_results(
 pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
     let mut sport: Option<String> = None;
     let mut score_entry_mode: Option<ScoreEntryMode> = None;
+    let mut ranking_method: Option<RankingMethod> = None;
+    let mut scheduling_method: Option<SchedulingMethod> = None;
     let mut team_size: Option<u8> = None;
     let mut scheduling_frequency: Option<u8> = None;
     let mut match_duration_minutes: Option<u16> = None;
@@ -479,6 +526,10 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
                 sport = Some(val.trim().to_string());
             } else if let Some(val) = meta.strip_prefix("score_entry_mode:") {
                 score_entry_mode = parse_score_entry_mode(val.trim());
+            } else if let Some(val) = meta.strip_prefix("ranking_method:") {
+                ranking_method = parse_ranking_method(val.trim());
+            } else if let Some(val) = meta.strip_prefix("scheduling_method:") {
+                scheduling_method = parse_scheduling_method(val.trim());
             } else if let Some(val) = meta.strip_prefix("team_size:") {
                 team_size = val.trim().parse().ok();
             } else if let Some(val) = meta.strip_prefix("scheduling_frequency:") {
@@ -722,6 +773,8 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
     Ok(ImportedResults {
         sport,
         score_entry_mode,
+        ranking_method,
+        scheduling_method,
         team_size,
         scheduling_frequency,
         match_duration_minutes,
@@ -774,6 +827,18 @@ pub fn import_rankings(csv: &str) -> CsvResult<Vec<(String, crate::models::Playe
         let rating: f64 = parse_required(row, cols.rating, "rating", row_num)?
             .parse()
             .map_err(|_| CsvError::Format(format!("bad rating at row {row_num}")))?;
+        let ranking_method = cols
+            .ranking_method
+            .and_then(|idx| row.get(idx))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|raw| {
+                parse_ranking_method(raw).ok_or_else(|| {
+                    CsvError::Format(format!("bad ranking_method '{raw}' at row {row_num}"))
+                })
+            })
+            .transpose()?
+            .unwrap_or_default();
         let uncertainty: f64 = parse_required(row, cols.uncertainty, "uncertainty", row_num)?
             .parse()
             .map_err(|_| CsvError::Format(format!("bad uncertainty at row {row_num}")))?;
@@ -824,6 +889,7 @@ pub fn import_rankings(csv: &str) -> CsvResult<Vec<(String, crate::models::Playe
             name,
             PlayerRanking {
                 player_id: PlayerId(synthetic_id),
+                ranking_method,
                 rating,
                 conservative_rating,
                 uncertainty,
@@ -870,7 +936,7 @@ pub fn import_players(csv: &str) -> CsvResult<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{PlayerId, PlayerStatus, RoundNumber};
+    use crate::models::{PlayerId, PlayerStatus, RankingMethod, RoundNumber};
 
     #[test]
     fn rankings_csv_round_trip_handles_quoted_names() {
@@ -893,6 +959,7 @@ mod tests {
         let rankings = vec![
             PlayerRanking {
                 player_id: PlayerId(1),
+                ranking_method: RankingMethod::GoalModelV1,
                 rating: 1.23,
                 conservative_rating: 0.78,
                 uncertainty: 0.45,
@@ -905,6 +972,7 @@ mod tests {
             },
             PlayerRanking {
                 player_id: PlayerId(2),
+                ranking_method: RankingMethod::GoalModelV1,
                 rating: -0.5,
                 conservative_rating: -1.4,
                 uncertainty: 0.9,

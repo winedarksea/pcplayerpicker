@@ -2,7 +2,9 @@ pub mod goal_model;
 pub mod synergy;
 pub mod trivariate;
 
-use crate::models::{MatchId, MatchResult, Player, PlayerRanking, ScheduledMatch, SessionConfig};
+use crate::models::{
+    MatchId, MatchResult, Player, PlayerRanking, RankingMethod, ScheduledMatch, SessionConfig,
+};
 use std::collections::HashMap;
 
 /// Pluggable ranking algorithm interface. Implementations live in submodules.
@@ -35,4 +37,13 @@ pub trait RankingEngine {
         target_spread: u32,
         config: &SessionConfig,
     ) -> u32;
+}
+
+pub fn select_ranking_engine(config: &SessionConfig) -> (RankingMethod, Box<dyn RankingEngine>) {
+    match config.ranking_method {
+        RankingMethod::GoalModelV1 => (
+            RankingMethod::GoalModelV1,
+            Box::new(goal_model::GoalModelEngine::default()),
+        ),
+    }
 }
