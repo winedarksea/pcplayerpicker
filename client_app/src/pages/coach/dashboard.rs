@@ -248,6 +248,7 @@ pub fn MatchesTab() -> impl IntoView {
     let round_share_status_message: RwSignal<String> = RwSignal::new(String::new());
     let round_share_image_is_busy = RwSignal::new(false);
     let reseed_flash = RwSignal::new(false);
+    let show_future_rounds = RwSignal::new(false);
 
     let current_round_share_snapshot = {
         let ctx = ctx.clone();
@@ -493,6 +494,27 @@ pub fn MatchesTab() -> impl IntoView {
                     .collect();
                 round_matches.sort_by_key(|m| m.field);
 
+                // Collect pre-generated future rounds (rounds beyond current_round).
+                let mut future_round_numbers: Vec<u32> = {
+                    let mut nums: Vec<u32> = manager.state.matches.values()
+                        .filter(|m| m.round.0 > round && m.status != MatchStatus::Voided)
+                        .map(|m| m.round.0)
+                        .collect();
+                    nums.sort_unstable();
+                    nums.dedup();
+                    nums
+                };
+                future_round_numbers.sort_unstable();
+                let future_rounds: Vec<(u32, Vec<app_core::models::ScheduledMatch>)> =
+                    future_round_numbers.into_iter().map(|rn| {
+                        let mut ms: Vec<_> = manager.state.matches.values()
+                            .filter(|m| m.round.0 == rn && m.status != MatchStatus::Voided)
+                            .cloned()
+                            .collect();
+                        ms.sort_by_key(|m| m.field);
+                        (rn, ms)
+                    }).collect();
+
                 if round_matches.is_empty() {
                     view! {
                         <div class="text-center py-12 space-y-3">
@@ -664,6 +686,83 @@ pub fn MatchesTab() -> impl IntoView {
                                     }
                                 }).collect_view()}
                             </div>
+                            // ── Future rounds (pre-generated) ────────────────────────────
+                            {if !future_rounds.is_empty() {
+                                let player_map2 = player_map.clone();
+                                view! {
+                                    <div class="mt-5">
+                                        <button
+                                            class="flex items-center gap-2 text-sm text-gray-400 \
+                                                   hover:text-gray-200 transition-colors"
+                                            on:click=move |_| show_future_rounds.update(|v| *v = !*v)
+                                        >
+                                            <span class="font-medium">
+                                                {move || if show_future_rounds.get() {
+                                                    "▾ Hide upcoming rounds"
+                                                } else {
+                                                    "▸ Show upcoming rounds"
+                                                }}
+                                            </span>
+                                            <span class="text-xs bg-gray-800 px-2 py-0.5 rounded-full text-gray-500">
+                                                {future_rounds.len()}" round"
+                                                {if future_rounds.len() == 1 { "" } else { "s" }}
+                                            </span>
+                                        </button>
+                                        {move || show_future_rounds.get().then(|| {
+                                            let player_map3 = player_map2.clone();
+                                            future_rounds.iter().map(|(rn, ms)| {
+                                                let rn = *rn;
+                                                let player_map4 = player_map3.clone();
+                                                view! {
+                                                    <div class="mt-4">
+                                                        <h3 class="text-sm font-semibold text-gray-400 mb-2">
+                                                            "Round "{rn}
+                                                        </h3>
+                                                        <div class="space-y-2">
+                                                            {ms.iter().map(|m| {
+                                                                let team_a_names: Vec<_> = m.team_a.iter()
+                                                                    .filter_map(|id| player_map4.get(id).map(|p| p.name.clone()))
+                                                                    .collect();
+                                                                let team_b_names: Vec<_> = m.team_b.iter()
+                                                                    .filter_map(|id| player_map4.get(id).map(|p| p.name.clone()))
+                                                                    .collect();
+                                                                let field = m.field;
+                                                                view! {
+                                                                    <div class="bg-gray-900/60 border border-gray-700/30 \
+                                                                                rounded-xl p-3 opacity-75">
+                                                                        <div class="flex items-center justify-between mb-2">
+                                                                            <span class="text-xs font-semibold uppercase \
+                                                                                         tracking-widest text-gray-600">
+                                                                                "Field "{field}
+                                                                            </span>
+                                                                            <span class="text-xs text-gray-600">"Upcoming"</span>
+                                                                        </div>
+                                                                        <div class="flex items-center gap-3">
+                                                                            <div class="flex-1 text-center">
+                                                                                {team_a_names.iter().map(|n| view! {
+                                                                                    <p class="text-gray-300 text-sm">{n.clone()}</p>
+                                                                                }).collect_view()}
+                                                                            </div>
+                                                                            <span class="text-gray-600 font-bold shrink-0">"vs"</span>
+                                                                            <div class="flex-1 text-center">
+                                                                                {team_b_names.iter().map(|n| view! {
+                                                                                    <p class="text-gray-300 text-sm">{n.clone()}</p>
+                                                                                }).collect_view()}
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                }
+                                                            }).collect_view()}
+                                                        </div>
+                                                    </div>
+                                                }
+                                            }).collect_view()
+                                        })}
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <div/> }.into_any()
+                            }}
                             <RoundPlayerChangeSheet open_match_id=player_change_sheet_match_id/>
                         </div>
                     }.into_any()

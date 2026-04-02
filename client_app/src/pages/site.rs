@@ -286,6 +286,10 @@ pub fn FaqPage() -> impl IntoView {
             "While they provide a useful indication of performance, these measures lack insight into many confounding real world factors. Adding more matches improves accuracy but introduces other tradeoffs like increased fatigue. These numbers may anchor judgements but should never be the exclusive judgement of players.",
         ),
         (
+            "What is Bayesian active scheduling, and why isn't it used more widely?",
+            "Traditional brackets were much easier to organize in the pen and paper era. Now, Bayesian rankings can deliver better quality rankings in fewer rounds, making this better for skills determination, with new schedules distributed in seconds across devices. Brackets remain useful for for major ticketed events (world cups) where brackets provide predictable, fan-understandable storylines. Here, in setup, users can choose to create rounds in batches, if they want a more predictable flow with fewer schedule updates.",
+        ),
+        (
             "What about privacy?",
             "Use initials, nicknames, or jersey numbers if you want less identifying data stored locally. The app is designed to keep the heavy lifting on the coach device, and online sharing is optional.",
         ),
@@ -299,7 +303,7 @@ pub fn FaqPage() -> impl IntoView {
         ),
         (
             "My online session is seeing quota limits, how do I prevent this?",
-            "The current hosting plan has a maximum global pool of 100000 daily online session calls. That may sound like a lot, but with each schedule refresh from a player counting as a call, this can add up quickly. Quota limits should not stop usage of the main coach device. We recommend having a backup plan of sharing schedules over group chat apps. If you see this issue routinely, file an issue on GitHub (see below).",
+            "The current hosting plan has a maximum global pool of 100000 daily online session (Cloudflare Worker) calls. That may sound like a lot, but with each schedule refresh from a player counting as a call, this can add up quickly. Quota limits should not stop usage of the main coach device. We recommend having a backup plan of sharing schedules over group chat apps. If you see this issue routinely, file an issue on GitHub (see below).",
         ),
         (
             "How do I report Bugs and Issues?",
