@@ -174,16 +174,18 @@ impl RankingCols {
         Self {
             rank: 0,
             name: 1,
-            ranking_method: Some(2),
-            rating: 3,
-            conservative_rating: Some(4),
-            uncertainty: 5,
-            rank_lo: 6,
-            rank_hi: 7,
-            matches_played: 8,
-            total_score: 9,
-            prob_top_k: Some(10),
-            active: Some(11),
+            // Keep headerless import compatible with historical exports that
+            // did not include `ranking_method`.
+            ranking_method: None,
+            rating: 2,
+            conservative_rating: Some(3),
+            uncertainty: 4,
+            rank_lo: 5,
+            rank_hi: 6,
+            matches_played: 7,
+            total_score: 8,
+            prob_top_k: Some(9),
+            active: Some(10),
         }
     }
 }
@@ -1000,5 +1002,18 @@ mod tests {
         let csv = "1,\"Doe, Jane\"\n\"Roe, John\"\n# comment\n2,Alice\n";
         let names = import_players(csv).expect("player import succeeds");
         assert_eq!(names, vec!["Doe, Jane", "Roe, John", "Alice"]);
+    }
+
+    #[test]
+    fn import_rankings_supports_legacy_headerless_format() {
+        let legacy_csv = "1,Alice,1.2300,0.7800,0.4500,1,2,5,8,0.8000,yes\n2,Bob,-0.5000,-1.4000,0.9000,1,2,5,2,0.2000,no\n";
+        let imported = import_rankings(legacy_csv).expect("legacy import succeeds");
+
+        assert_eq!(imported.len(), 2);
+        assert_eq!(imported[0].0, "Alice");
+        assert_eq!(imported[1].0, "Bob");
+        assert_eq!(imported[0].1.ranking_method, RankingMethod::GoalModelV1);
+        assert!((imported[0].1.rating - 1.23).abs() < 1e-6);
+        assert!(!imported[1].1.is_active);
     }
 }

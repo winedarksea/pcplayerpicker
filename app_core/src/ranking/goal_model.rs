@@ -1273,7 +1273,7 @@ mod tests {
         .into_iter()
         .map(|scheduled_match| (scheduled_match.id, scheduled_match))
         .collect();
-        let results = vec![
+        let results = [
             points_per_player_result(1, vec![(1, 3), (3, 0)], 1.0),
             points_per_player_result(2, vec![(2, 1), (3, 0)], 1.0),
             points_per_player_result(3, vec![(2, 1), (3, 0)], 1.0),

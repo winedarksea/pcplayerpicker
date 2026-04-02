@@ -490,6 +490,7 @@ mod tests {
     };
     use app_core::models::{
         MatchId, MatchStatus, Player, PlayerId, PlayerStatus, RoundNumber, ScheduledMatch,
+        SchedulingMethod,
     };
     use std::collections::HashMap;
 
@@ -640,6 +641,7 @@ mod tests {
             id: MatchId(match_number),
             round: RoundNumber(1),
             field: field_number,
+            scheduling_method: SchedulingMethod::RoundRobinV1,
             team_a: team_a_player_numbers.into_iter().map(PlayerId).collect(),
             team_b: team_b_player_numbers.into_iter().map(PlayerId).collect(),
             status: MatchStatus::Scheduled,
