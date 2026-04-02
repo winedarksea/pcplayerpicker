@@ -193,14 +193,10 @@ pub fn RoundPlayerChangeSheet(open_match_id: RwSignal<Option<MatchId>>) -> impl 
 
     view! {
         {move || {
-            let Some(draft) = round_change_draft.get() else {
-                return None;
-            };
+            let draft = round_change_draft.get()?;
 
             let session_snapshot = ctx.session.get();
-            let Some(manager) = session_snapshot.as_ref() else {
-                return None;
-            };
+            let manager = session_snapshot.as_ref()?;
 
             let player_names = manager
                 .state

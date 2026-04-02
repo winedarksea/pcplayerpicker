@@ -1094,14 +1094,14 @@ pub fn AnalysisTab() -> impl IntoView {
                         view! {
                             <div class="space-y-3">
                                 <p class="text-xs text-gray-500">
-                                    "Pair synergy via RAPM. Requires ≥30% of player pairs observed."
+                                    "Teammate synergy via duration-weighted ridge APM. Requires ≥30% of same-team pairs observed."
                                 </p>
                                 {match synergy {
                                     None => view! {
                                         <div class="text-center py-8 text-gray-400">
                                             <p class="font-medium">"Not enough data yet"</p>
                                             <p class="text-sm mt-1">
-                                                "Need more matches covering a wider variety of player pairings."
+                                                "Need more matches with a wider variety of teammate pairings."
                                             </p>
                                         </div>
                                     }.into_any(),
@@ -1113,6 +1113,36 @@ pub fn AnalysisTab() -> impl IntoView {
                                                 .map(|p| p.name.chars().take(10).collect())
                                                 .unwrap_or_else(|| format!("#{}", id.0)))
                                             .collect();
+                                        let mut strongest_pairs: Vec<(String, String, f64, f64, f64)> = Vec::new();
+                                        for i in 0..n {
+                                            for j in (i + 1)..n {
+                                                let score = mat.teammate_synergy[i][j];
+                                                let exposure = mat.teammate_exposure[i][j];
+                                                if exposure <= 0.0 || score <= 0.0 {
+                                                    continue;
+                                                }
+                                                strongest_pairs.push((
+                                                    names[i].clone(),
+                                                    names[j].clone(),
+                                                    score,
+                                                    exposure,
+                                                    mat.teammate_reliability[i][j],
+                                                ));
+                                            }
+                                        }
+                                        strongest_pairs.sort_by(|left, right| {
+                                            right
+                                                .4
+                                                .partial_cmp(&left.4)
+                                                .unwrap_or(std::cmp::Ordering::Equal)
+                                                .then_with(|| {
+                                                    right
+                                                        .2
+                                                        .partial_cmp(&left.2)
+                                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                                })
+                                        });
+                                        strongest_pairs.truncate(6);
 
                                         view! {
                                             <div class="space-y-4">
@@ -1150,18 +1180,45 @@ pub fn AnalysisTab() -> impl IntoView {
                                                     </div>
                                                 </div>
 
-                                                // Synergy heatmap (SVG)
-                                                {(n >= 3).then(|| {
-                                                    let names2 = names.clone();
-                                                    let matrix = mat.matrix.clone();
+                                                {(!strongest_pairs.is_empty()).then(|| {
                                                     view! {
                                                         <div>
                                                             <p class="text-xs text-gray-500 mb-2">
-                                                                "Pair synergy (blue = better together, red = worse)"
+                                                                "Most reliable positive teammate pairs"
+                                                            </p>
+                                                            <div class="space-y-1">
+                                                                {strongest_pairs.iter().map(|(left_name, right_name, score, exposure, reliability)| {
+                                                                    let reliability_pct = (*reliability * 100.0).round() as i32;
+                                                                    view! {
+                                                                        <div class="grid grid-cols-[minmax(0,1fr)_56px_56px_44px] gap-3 text-sm items-center">
+                                                                            <span class="text-gray-300 truncate">{format!("{left_name} + {right_name}")}</span>
+                                                                            <span class="text-right tabular-nums text-blue-300">{format!("{:+.2}", score)}</span>
+                                                                            <span class="text-right tabular-nums text-gray-400">{format!("{:.1}x", exposure)}</span>
+                                                                            <span class="text-right tabular-nums text-gray-500">{format!("{}%", reliability_pct)}</span>
+                                                                        </div>
+                                                                    }
+                                                                }).collect_view()}
+                                                            </div>
+                                                        </div>
+                                                    }
+                                                })}
+
+                                                // Synergy heatmap (SVG)
+                                                {(n >= 3).then(|| {
+                                                    let names2 = names.clone();
+                                                    let matrix = mat.teammate_synergy.clone();
+                                                    let exposure = mat.teammate_exposure.clone();
+                                                    let reliability = mat.teammate_reliability.clone();
+                                                    view! {
+                                                        <div>
+                                                            <p class="text-xs text-gray-500 mb-2">
+                                                                "Teammate synergy (blue = better together, red = worse, dim = low confidence)"
                                                             </p>
                                                             <SynergyHeatmap
                                                                 names=names2
                                                                 matrix=matrix
+                                                                exposure=exposure
+                                                                reliability=reliability
                                                             />
                                                         </div>
                                                     }
@@ -1460,7 +1517,12 @@ fn OverallTable(
 // ── Synergy heatmap SVG ──────────────────────────────────────────────────────
 
 #[component]
-fn SynergyHeatmap(names: Vec<String>, matrix: Vec<Vec<f64>>) -> impl IntoView {
+fn SynergyHeatmap(
+    names: Vec<String>,
+    matrix: Vec<Vec<f64>>,
+    exposure: Vec<Vec<f64>>,
+    reliability: Vec<Vec<f64>>,
+) -> impl IntoView {
     let n = names.len();
     if n == 0 {
         return view! { <div/> }.into_any();
@@ -1518,15 +1580,35 @@ fn SynergyHeatmap(names: Vec<String>, matrix: Vec<Vec<f64>>) -> impl IntoView {
                             {(0..n).map(|j| {
                                 let x_left = label_w + j as i32 * cell;
                                 let val = matrix[i][j];
+                                let pair_reliability = if i == j { 1.0 } else { reliability[i][j] };
+                                let fill_opacity = if i == j {
+                                    1.0
+                                } else {
+                                    0.20 + 0.80 * pair_reliability.clamp(0.0, 1.0)
+                                };
                                 let bg = color(if i == j { 0.0 } else { val });
                                 let text_color = if val.abs() > max_abs * 0.6 { "#ffffff" }
                                     else { "#1f2937" };
                                 let label = if i == j { "—".to_string() }
                                     else { format!("{:+.1}", val) };
+                                let tooltip = if i == j {
+                                    format!("{} individual APM: {:+.2}", names[i], val)
+                                } else {
+                                    format!(
+                                        "{} + {}\nSynergy: {:+.2}\nExposure: {:.1}x\nReliability: {:.0}%",
+                                        names[i],
+                                        names[j],
+                                        val,
+                                        exposure[i][j],
+                                        pair_reliability * 100.0,
+                                    )
+                                };
                                 view! {
                                     <g>
                                         <rect x=x_left y=y_top width=cell height=cell
-                                            fill=bg stroke="#030712" stroke-width="1"/>
+                                            fill=bg fill-opacity=fill_opacity
+                                            stroke="#030712" stroke-width="1"/>
+                                        <title>{tooltip}</title>
                                         <text
                                             x=x_left + cell/2
                                             y=cy + 3
