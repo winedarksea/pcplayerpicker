@@ -1,11 +1,11 @@
+use super::match_player_sheet::RoundPlayerChangeSheet;
 use super::schedule_export::{
     build_round_schedule_share_snapshot, copy_text_to_clipboard, format_round_schedule_share_text,
     share_round_schedule_image, RoundScheduleImageShareOutcome,
 };
-use super::match_player_sheet::RoundPlayerChangeSheet;
-use crate::pages::score_entry::SharedScoreEntryCard;
 use crate::coach_sync::pull_assistant_score_events;
 use crate::meta::use_page_meta;
+use crate::pages::score_entry::SharedScoreEntryCard;
 use crate::state::{load_session, save_session, AppContext};
 use crate::sync::{
     go_online, load_sync_state, push_new_events, push_session_archive, set_recovery_pin,
@@ -61,12 +61,9 @@ fn validate_new_player_name(
         return Err("Enter a player name.".to_string());
     }
 
-    let duplicate_exists = existing_players.values().any(|player| {
-        player
-            .name
-            .trim()
-            .eq_ignore_ascii_case(trimmed_name)
-    });
+    let duplicate_exists = existing_players
+        .values()
+        .any(|player| player.name.trim().eq_ignore_ascii_case(trimmed_name));
     if duplicate_exists {
         return Err("That player name is already in this session.".to_string());
     }
@@ -668,10 +665,28 @@ fn MatchScoreCard(
             entered_by=Role::Coach
             on_submit=on_submit
             show_duration_picker=true
+            auto_save=true
             submit_label="Save Scores"
             saved_label="Saved ✓"
         />
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct CurrentRoundScoreEntryCardDefinition {
+    match_id: MatchId,
+    field: u8,
+    round: u32,
+    team_a: Vec<PlayerId>,
+    team_b: Vec<PlayerId>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct CurrentRoundScoreEntrySectionDefinition {
+    round: u32,
+    score_entry_mode: ScoreEntryMode,
+    player_names: HashMap<PlayerId, String>,
+    cards: Vec<CurrentRoundScoreEntryCardDefinition>,
 }
 
 #[component]
@@ -693,6 +708,48 @@ pub fn ResultsTab() -> impl IntoView {
                 }
             });
         }
+    };
+    let current_round_score_entry_section = {
+        let ctx = ctx.clone();
+        Memo::new(move |_| {
+            ctx.session.with(|session| {
+                let manager = session.as_ref()?;
+                let round = manager.state.current_round.0;
+                let mut cards: Vec<_> = manager
+                    .state
+                    .matches
+                    .values()
+                    .filter(|scheduled_match| {
+                        scheduled_match.round.0 == round
+                            && scheduled_match.status != MatchStatus::Voided
+                    })
+                    .map(|scheduled_match| CurrentRoundScoreEntryCardDefinition {
+                        match_id: scheduled_match.id,
+                        field: scheduled_match.field,
+                        round: scheduled_match.round.0,
+                        team_a: scheduled_match.team_a.clone(),
+                        team_b: scheduled_match.team_b.clone(),
+                    })
+                    .collect();
+                cards.sort_by_key(|card| card.field);
+                Some(CurrentRoundScoreEntrySectionDefinition {
+                    round,
+                    score_entry_mode: manager
+                        .state
+                        .config
+                        .as_ref()
+                        .map(|config| config.score_entry_mode)
+                        .unwrap_or(ScoreEntryMode::PointsPerPlayer),
+                    player_names: manager
+                        .state
+                        .players
+                        .iter()
+                        .map(|(id, player)| (*id, player.name.clone()))
+                        .collect(),
+                    cards,
+                })
+            })
+        })
     };
 
     // Handler for the "Download All Results CSV" button.
@@ -735,32 +792,15 @@ pub fn ResultsTab() -> impl IntoView {
     view! {
         <div class="px-4 py-5 space-y-4">
             {move || {
-                let session_opt = ctx.session.get();
-                let manager = match session_opt.as_ref() {
-                    Some(m) => m,
+                let score_entry_section = match current_round_score_entry_section.get() {
+                    Some(section) => section,
                     None => return view! { <LoadingOrMissing/> }.into_any(),
                 };
 
-                let round = manager.state.current_round.0;
-                let player_names: HashMap<_, _> = manager.state.players.iter()
-                    .map(|(id, p)| (*id, p.name.clone()))
-                    .collect();
-
-                let mut matches: Vec<_> = manager.state.matches.values()
-                    .filter(|m| m.round.0 == round && m.status != MatchStatus::Voided)
-                    .collect();
-                matches.sort_by_key(|m| m.field);
-                let score_entry_mode = manager
-                    .state
-                    .config
-                    .as_ref()
-                    .map(|config| config.score_entry_mode)
-                    .unwrap_or(ScoreEntryMode::PointsPerPlayer);
-
-                if matches.is_empty() {
+                if score_entry_section.cards.is_empty() {
                     view! {
                         <div class="text-center py-12 text-gray-400">
-                            <p>"No matches scheduled for Round "{round}"."</p>
+                            <p>"No matches scheduled for Round "{score_entry_section.round}"."</p>
                             <p class="text-sm mt-1">
                                 "Go to the Matches tab to generate a schedule first."
                             </p>
@@ -768,26 +808,30 @@ pub fn ResultsTab() -> impl IntoView {
                     }.into_any()
                 } else {
                     let on_submit = on_score_submit;
+                    let CurrentRoundScoreEntrySectionDefinition {
+                        round,
+                        score_entry_mode,
+                        player_names,
+                        cards,
+                    } = score_entry_section;
                     view! {
                         <div class="space-y-4">
                             <h2 class="font-bold text-lg">"Round "{round}" — Score Entry"</h2>
-                            {matches.into_iter().map(|m| {
-                                let mid     = m.id;
-                                let field   = m.field;
-                                let rnd     = m.round.0;
-                                let team_a  = m.team_a.clone();
-                                let team_b  = m.team_b.clone();
-                                let existing = manager.state.results.get(&mid).cloned();
-                                let pnames  = player_names.clone();
-                                let submit  = on_submit;
+                            {cards.into_iter().map(|card| {
+                                let existing = ctx.session.with_untracked(|session| {
+                                    session
+                                        .as_ref()
+                                        .and_then(|manager| manager.state.results.get(&card.match_id).cloned())
+                                });
+                                let submit = on_submit;
                                 view! {
                                     <MatchScoreCard
-                                        match_id=mid
-                                        field=field
-                                        round=rnd
-                                        team_a=team_a
-                                        team_b=team_b
-                                        player_names=pnames
+                                        match_id=card.match_id
+                                        field=card.field
+                                        round=card.round
+                                        team_a=card.team_a
+                                        team_b=card.team_b
+                                        player_names=player_names.clone()
                                         existing_result=existing
                                         score_entry_mode=score_entry_mode
                                         on_submit=submit
@@ -1956,9 +2000,8 @@ pub fn PlayersTab() -> impl IntoView {
             let raw_name = new_player_name.get_untracked();
 
             let validated_name = match ctx.session.with_untracked(|opt| {
-                opt.as_ref().map(|manager| {
-                    validate_new_player_name(&raw_name, &manager.state.players)
-                })
+                opt.as_ref()
+                    .map(|manager| validate_new_player_name(&raw_name, &manager.state.players))
             }) {
                 Some(Ok(valid_name)) => valid_name,
                 Some(Err(error_message)) => {

@@ -235,7 +235,9 @@ fn apply_event(state: &mut SessionState, event: &Event, entered_by: &Role) {
 
         Event::RoundScheduleUpdated { round: _, matches } => {
             for updated_match in matches {
-                state.matches.insert(updated_match.id, updated_match.clone());
+                state
+                    .matches
+                    .insert(updated_match.id, updated_match.clone());
             }
         }
 

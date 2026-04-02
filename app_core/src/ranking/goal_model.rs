@@ -91,13 +91,8 @@ impl GoalModelEngine {
         // Newton-Raphson iteration
         let mut final_hessian: Option<DMatrix<f64>> = None;
         for _iter in 0..MAX_ITER {
-            let (grad, hessian) = self.log_posterior_grad_hessian(
-                &theta,
-                &player_index,
-                matches_by_id,
-                results,
-                n,
-            );
+            let (grad, hessian) =
+                self.log_posterior_grad_hessian(&theta, &player_index, matches_by_id, results, n);
             let grad_norm = grad.norm();
             if grad_norm < GRAD_TOL {
                 final_hessian = Some(hessian);
@@ -118,14 +113,8 @@ impl GoalModelEngine {
         // Posterior covariance ≈ (-Hessian)^{-1}
         // Reuse the Hessian from the final converged iteration when available.
         let neg_hessian = -final_hessian.unwrap_or_else(|| {
-            self.log_posterior_grad_hessian(
-                &theta,
-                &player_index,
-                matches_by_id,
-                results,
-                n,
-            )
-            .1
+            self.log_posterior_grad_hessian(&theta, &player_index, matches_by_id, results, n)
+                .1
         });
         let covariance = match neg_hessian.cholesky() {
             Some(chol) => chol.inverse(),
@@ -170,7 +159,9 @@ impl GoalModelEngine {
                         if !participation_status.played() {
                             continue;
                         }
-                        let Some(&i) = player_index.get(player_id) else { continue };
+                        let Some(&i) = player_index.get(player_id) else {
+                            continue;
+                        };
 
                         let mut coeffs: Vec<(usize, f64)> = vec![(i, 1.0)];
                         let (teammates, opponents): (&[PlayerId], &[PlayerId]) =
@@ -247,8 +238,7 @@ impl GoalModelEngine {
                             grad[i] += w * dl_dmu;
                         }
 
-                        let d2l_dlambda2 =
-                            -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
+                        let d2l_dlambda2 = -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
                         let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
                         for &i in &team_indices {
                             for &j in &team_indices {
@@ -264,8 +254,12 @@ impl GoalModelEngine {
                         if !participation_status.played() {
                             continue;
                         }
-                        let Some(&i) = player_index.get(player_id) else { continue };
-                        let Some(&raw_pts) = player_points.get(player_id) else { continue };
+                        let Some(&i) = player_index.get(player_id) else {
+                            continue;
+                        };
+                        let Some(&raw_pts) = player_points.get(player_id) else {
+                            continue;
+                        };
                         let k = raw_pts as f64;
 
                         // Linear predictor with teammate/opponent context.
@@ -295,8 +289,7 @@ impl GoalModelEngine {
                             add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
                         }
 
-                        let mu_linear: f64 =
-                            coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
+                        let mu_linear: f64 = coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
 
                         let lambda = mu_linear.exp();
                         let r = self.dispersion;
@@ -307,8 +300,7 @@ impl GoalModelEngine {
                             grad[*j] += w * dl_dmu * *c_j;
                         }
 
-                        let d2l_dlambda2 =
-                            -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
+                        let d2l_dlambda2 = -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
                         let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
                         for (j, c_j) in &coeffs {
                             for (k_idx, c_k) in &coeffs {

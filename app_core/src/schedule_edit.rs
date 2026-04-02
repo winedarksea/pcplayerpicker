@@ -175,7 +175,11 @@ fn register_match_players_in_round(
     )?;
 
     let mut players_seen_in_match = HashSet::new();
-    for player_id in scheduled_match.team_a.iter().chain(scheduled_match.team_b.iter()) {
+    for player_id in scheduled_match
+        .team_a
+        .iter()
+        .chain(scheduled_match.team_b.iter())
+    {
         let Some(player) = state.players.get(player_id) else {
             return Err(RoundScheduleEditError::UnknownPlayer {
                 match_id: scheduled_match.id.0,
@@ -238,7 +242,9 @@ mod tests {
 
     fn build_manager_with_two_matches() -> SessionManager {
         let mut manager = SessionManager::new(SessionConfig::new(2, 1, Sport::Soccer));
-        for name in ["Alice", "Bea", "Cara", "Dani", "Elle", "Fran", "Gia", "Hana"] {
+        for name in [
+            "Alice", "Bea", "Cara", "Dani", "Elle", "Fran", "Gia", "Hana",
+        ] {
             manager.add_player(name.to_string());
         }
         manager.log.append(
@@ -355,8 +361,9 @@ mod tests {
             manager.state.matches[&MatchId(2)].clone(),
         ];
 
-        let error = validate_round_schedule_update(&manager.state, RoundNumber(1), &updated_matches)
-            .expect_err("duplicate player should be rejected");
+        let error =
+            validate_round_schedule_update(&manager.state, RoundNumber(1), &updated_matches)
+                .expect_err("duplicate player should be rejected");
 
         assert!(matches!(
             error,
@@ -384,8 +391,9 @@ mod tests {
             manager.state.matches[&MatchId(2)].clone(),
         ];
 
-        let error = validate_round_schedule_update(&manager.state, RoundNumber(1), &updated_matches)
-            .expect_err("incomplete roster should be rejected");
+        let error =
+            validate_round_schedule_update(&manager.state, RoundNumber(1), &updated_matches)
+                .expect_err("incomplete roster should be rejected");
 
         assert!(matches!(
             error,
@@ -419,8 +427,9 @@ mod tests {
             status: MatchStatus::Scheduled,
         }];
 
-        let error = validate_round_schedule_update(&manager.state, RoundNumber(1), &updated_matches)
-            .expect_err("players locked into completed matches must remain unique");
+        let error =
+            validate_round_schedule_update(&manager.state, RoundNumber(1), &updated_matches)
+                .expect_err("players locked into completed matches must remain unique");
 
         assert!(matches!(
             error,

@@ -149,12 +149,7 @@ fn full_offline_simulation_converges() {
 
             match_id_counter += 1;
             manager.enter_score(
-                MatchResult::from_legacy_player_scores(
-                    sched_match.id,
-                    scores,
-                    1.0,
-                    Role::Coach,
-                ),
+                MatchResult::from_legacy_player_scores(sched_match.id, scores, 1.0, Role::Coach),
                 Role::Coach,
             );
         }

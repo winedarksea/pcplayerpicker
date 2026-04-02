@@ -12,7 +12,7 @@ use crate::read_only_cache::{load_cached_read_only_event_log, save_cached_read_o
 use crate::read_only_sync::should_run_debounced_activation_refresh;
 use crate::sync::{auth_token, pull_events, resolve_token};
 use app_core::events::{materialize, EventLog};
-use app_core::models::{MatchStatus, PlayerId, PlayerStatus, MatchResult};
+use app_core::models::{MatchResult, MatchStatus, PlayerId, PlayerStatus};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 use wasm_bindgen::prelude::Closure;

@@ -382,7 +382,8 @@ pub fn export_results(
         let round = sm.map(|m| m.round.0).unwrap_or(0);
         let team_a_ids: Vec<_> = sm.map(|m| m.team_a.clone()).unwrap_or_default();
         let team_b_ids: Vec<_> = sm.map(|m| m.team_b.clone()).unwrap_or_default();
-        let numeric_team_points = sm.and_then(|scheduled_match| result.numeric_team_points(scheduled_match));
+        let numeric_team_points =
+            sm.and_then(|scheduled_match| result.numeric_team_points(scheduled_match));
         let outcome_value = match &result.score_payload {
             crate::models::MatchScorePayload::WinDrawLose { outcome } => {
                 Some(match_outcome_csv_value(*outcome).to_string())
@@ -513,15 +514,13 @@ pub fn import_results(csv: &str) -> CsvResult<ImportedResults> {
             col_round = header_index(header, &["round"]).unwrap_or(1);
             col_team = header_index(header, &["team"]).unwrap_or(2);
             col_player = header_index(header, &["player"]).unwrap_or(3);
-            col_participation_status =
-                header_index(header, &["participation_status", "status"]);
+            col_participation_status = header_index(header, &["participation_status", "status"]);
             col_player_points = header_index(header, &["player_points", "goals"]);
             col_dnp = header_index(header, &["did_not_play", "dnp"]);
             col_team_a_points = header_index(header, &["team_a_points"]);
             col_team_b_points = header_index(header, &["team_b_points"]);
             col_outcome = header_index(header, &["outcome"]);
-            col_duration =
-                header_index(header, &["duration_multiplier", "duration"]).unwrap_or(9);
+            col_duration = header_index(header, &["duration_multiplier", "duration"]).unwrap_or(9);
             data_start = 1;
         }
     }

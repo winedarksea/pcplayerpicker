@@ -71,9 +71,11 @@ pub fn RoundPlayerChangeSheet(open_match_id: RwSignal<Option<MatchId>>) -> impl 
                     return;
                 }
 
-                let next_draft = ctx
-                    .session
-                    .with(|session_opt| session_opt.as_ref().and_then(|manager| build_round_player_change_draft(manager, match_id)));
+                let next_draft = ctx.session.with(|session_opt| {
+                    session_opt
+                        .as_ref()
+                        .and_then(|manager| build_round_player_change_draft(manager, match_id))
+                });
 
                 if next_draft.is_some() {
                     round_change_draft.set(next_draft);
@@ -106,7 +108,9 @@ pub fn RoundPlayerChangeSheet(open_match_id: RwSignal<Option<MatchId>>) -> impl 
                     draft.selected_slot = Some(slot);
                 }
             });
-            selected_picker_player.set(current_player_in_selected_slot(round_change_draft.get_untracked()));
+            selected_picker_player.set(current_player_in_selected_slot(
+                round_change_draft.get_untracked(),
+            ));
             sheet_error_message.set(String::new());
         }
     };
@@ -119,8 +123,10 @@ pub fn RoundPlayerChangeSheet(open_match_id: RwSignal<Option<MatchId>>) -> impl 
                 return;
             };
 
-            let locked_assignments =
-                collect_locked_assignments_by_player(&manager.state.matches, draft_round(round_change_draft.get_untracked()));
+            let locked_assignments = collect_locked_assignments_by_player(
+                &manager.state.matches,
+                draft_round(round_change_draft.get_untracked()),
+            );
             let player_names = manager
                 .state
                 .players
@@ -171,11 +177,14 @@ pub fn RoundPlayerChangeSheet(open_match_id: RwSignal<Option<MatchId>>) -> impl 
             };
 
             let Some(updated_matches) = build_updated_matches_from_draft(&draft) else {
-                sheet_error_message.set("Every affected match needs a full roster before saving.".to_string());
+                sheet_error_message
+                    .set("Every affected match needs a full roster before saving.".to_string());
                 return;
             };
 
-            if let Err(error) = validate_round_schedule_update(&manager.state, draft.round, &updated_matches) {
+            if let Err(error) =
+                validate_round_schedule_update(&manager.state, draft.round, &updated_matches)
+            {
                 sheet_error_message.set(error.to_string());
                 return;
             }
@@ -419,7 +428,8 @@ fn build_round_player_change_draft(
     focused_match_id: MatchId,
 ) -> Option<RoundPlayerChangeDraft> {
     let focused_match = manager.state.matches.get(&focused_match_id)?;
-    if focused_match.status == MatchStatus::Completed || focused_match.status == MatchStatus::Voided {
+    if focused_match.status == MatchStatus::Completed || focused_match.status == MatchStatus::Voided
+    {
         return None;
     }
 
@@ -451,8 +461,16 @@ fn build_editable_match_draft(scheduled_match: &ScheduledMatch) -> EditableRound
         round: scheduled_match.round,
         field: scheduled_match.field,
         status: scheduled_match.status.clone(),
-        team_a: scheduled_match.team_a.iter().map(|player_id| Some(*player_id)).collect(),
-        team_b: scheduled_match.team_b.iter().map(|player_id| Some(*player_id)).collect(),
+        team_a: scheduled_match
+            .team_a
+            .iter()
+            .map(|player_id| Some(*player_id))
+            .collect(),
+        team_b: scheduled_match
+            .team_b
+            .iter()
+            .map(|player_id| Some(*player_id))
+            .collect(),
     }
 }
 
@@ -462,28 +480,30 @@ fn build_player_picker_options(
     player_names: &HashMap<PlayerId, String>,
 ) -> Vec<PlayerPickerOption> {
     let current_assignments = collect_editable_assignments_by_player(draft);
-    let locked_assignments = collect_locked_assignments_by_player(&manager.state.matches, Some(draft.round));
+    let locked_assignments =
+        collect_locked_assignments_by_player(&manager.state.matches, Some(draft.round));
 
     let mut picker_options: Vec<PlayerPickerOption> = manager
         .state
         .active_players()
         .map(|player| {
-            let assignment_label = if let Some(locked_assignment) = locked_assignments.get(&player.id) {
-                format!(
-                    "Field {} {}",
-                    locked_assignment.field,
-                    match locked_assignment.status {
-                        MatchStatus::Completed => "(done)",
-                        MatchStatus::InProgress => "(in progress)",
-                        MatchStatus::Scheduled => "(scheduled)",
-                        MatchStatus::Voided => "(voided)",
-                    }
-                )
-            } else if let Some(editable_match) = current_assignments.get(&player.id) {
-                format!("Field {}", editable_match.field)
-            } else {
-                "bench".to_string()
-            };
+            let assignment_label =
+                if let Some(locked_assignment) = locked_assignments.get(&player.id) {
+                    format!(
+                        "Field {} {}",
+                        locked_assignment.field,
+                        match locked_assignment.status {
+                            MatchStatus::Completed => "(done)",
+                            MatchStatus::InProgress => "(in progress)",
+                            MatchStatus::Scheduled => "(scheduled)",
+                            MatchStatus::Voided => "(voided)",
+                        }
+                    )
+                } else if let Some(editable_match) = current_assignments.get(&player.id) {
+                    format!("Field {}", editable_match.field)
+                } else {
+                    "bench".to_string()
+                };
 
             PlayerPickerOption {
                 player_id: player.id,
@@ -574,7 +594,11 @@ fn assign_player_to_slot(
         .iter_mut()
         .find(|editable_match| editable_match.match_id == selected_slot.match_id)
     {
-        if let Some(slot_value) = slot_value_mut(editable_match, selected_slot.team_side, selected_slot.slot_index) {
+        if let Some(slot_value) = slot_value_mut(
+            editable_match,
+            selected_slot.team_side,
+            selected_slot.slot_index,
+        ) {
             *slot_value = Some(player_id);
         }
     }
@@ -586,9 +610,11 @@ fn assign_player_to_slot(
                 .iter_mut()
                 .find(|editable_match| editable_match.match_id == existing_slot.match_id)
             {
-                if let Some(slot_value) =
-                    slot_value_mut(existing_match, existing_slot.team_side, existing_slot.slot_index)
-                {
+                if let Some(slot_value) = slot_value_mut(
+                    existing_match,
+                    existing_slot.team_side,
+                    existing_slot.slot_index,
+                ) {
                     *slot_value = None;
                 }
             }
@@ -637,7 +663,8 @@ fn visible_match_ids(draft: &RoundPlayerChangeDraft) -> HashSet<MatchId> {
             .find(|original_match| original_match.match_id == editable_match.match_id);
         let roster_changed = original_match
             .map(|original_match| {
-                original_match.team_a != editable_match.team_a || original_match.team_b != editable_match.team_b
+                original_match.team_a != editable_match.team_a
+                    || original_match.team_b != editable_match.team_b
             })
             .unwrap_or(false);
         let has_open_slot = editable_match
@@ -699,9 +726,13 @@ fn build_selected_slot_label(
     else {
         return "Select the player slot you want to edit.".to_string();
     };
-    let slot_player_name = slot_player_id(selected_match, selected_slot.team_side, selected_slot.slot_index)
-        .and_then(|player_id| player_names.get(&player_id).cloned())
-        .unwrap_or_else(|| "open slot".to_string());
+    let slot_player_name = slot_player_id(
+        selected_match,
+        selected_slot.team_side,
+        selected_slot.slot_index,
+    )
+    .and_then(|player_id| player_names.get(&player_id).cloned())
+    .unwrap_or_else(|| "open slot".to_string());
     format!(
         "Field {} is selected. The current slot contains {}.",
         selected_match.field, slot_player_name
@@ -722,7 +753,9 @@ fn build_affected_match_summaries(
             continue;
         };
 
-        if original_match.team_a == current_match.team_a && original_match.team_b == current_match.team_b {
+        if original_match.team_a == current_match.team_a
+            && original_match.team_b == current_match.team_b
+        {
             continue;
         }
 
@@ -764,8 +797,16 @@ fn build_affected_match_summaries(
 fn build_updated_matches_from_draft(draft: &RoundPlayerChangeDraft) -> Option<Vec<ScheduledMatch>> {
     let mut updated_matches = Vec::with_capacity(draft.current_editable_matches.len());
     for editable_match in &draft.current_editable_matches {
-        let team_a = editable_match.team_a.iter().copied().collect::<Option<Vec<_>>>()?;
-        let team_b = editable_match.team_b.iter().copied().collect::<Option<Vec<_>>>()?;
+        let team_a = editable_match
+            .team_a
+            .iter()
+            .copied()
+            .collect::<Option<Vec<_>>>()?;
+        let team_b = editable_match
+            .team_b
+            .iter()
+            .copied()
+            .collect::<Option<Vec<_>>>()?;
         updated_matches.push(ScheduledMatch {
             id: editable_match.match_id,
             round: editable_match.round,
@@ -782,21 +823,34 @@ fn count_open_slots(draft: &RoundPlayerChangeDraft) -> usize {
     draft
         .current_editable_matches
         .iter()
-        .flat_map(|editable_match| editable_match.team_a.iter().chain(editable_match.team_b.iter()))
+        .flat_map(|editable_match| {
+            editable_match
+                .team_a
+                .iter()
+                .chain(editable_match.team_b.iter())
+        })
         .filter(|player_id| player_id.is_none())
         .count()
 }
 
 fn first_open_slot(draft: &RoundPlayerChangeDraft) -> Option<EditablePlayerSlot> {
     for editable_match in &draft.current_editable_matches {
-        if let Some(slot_index) = editable_match.team_a.iter().position(|player_id| player_id.is_none()) {
+        if let Some(slot_index) = editable_match
+            .team_a
+            .iter()
+            .position(|player_id| player_id.is_none())
+        {
             return Some(EditablePlayerSlot {
                 match_id: editable_match.match_id,
                 team_side: EditableTeamSide::TeamA,
                 slot_index,
             });
         }
-        if let Some(slot_index) = editable_match.team_b.iter().position(|player_id| player_id.is_none()) {
+        if let Some(slot_index) = editable_match
+            .team_b
+            .iter()
+            .position(|player_id| player_id.is_none())
+        {
             return Some(EditablePlayerSlot {
                 match_id: editable_match.match_id,
                 team_side: EditableTeamSide::TeamB,
@@ -812,14 +866,22 @@ fn find_slot_for_player(
     player_id: PlayerId,
 ) -> Option<EditablePlayerSlot> {
     for editable_match in editable_matches {
-        if let Some(slot_index) = editable_match.team_a.iter().position(|slot_player| *slot_player == Some(player_id)) {
+        if let Some(slot_index) = editable_match
+            .team_a
+            .iter()
+            .position(|slot_player| *slot_player == Some(player_id))
+        {
             return Some(EditablePlayerSlot {
                 match_id: editable_match.match_id,
                 team_side: EditableTeamSide::TeamA,
                 slot_index,
             });
         }
-        if let Some(slot_index) = editable_match.team_b.iter().position(|slot_player| *slot_player == Some(player_id)) {
+        if let Some(slot_index) = editable_match
+            .team_b
+            .iter()
+            .position(|slot_player| *slot_player == Some(player_id))
+        {
             return Some(EditablePlayerSlot {
                 match_id: editable_match.match_id,
                 team_side: EditableTeamSide::TeamB,
@@ -859,7 +921,11 @@ fn current_player_in_selected_slot(draft: Option<RoundPlayerChangeDraft>) -> Opt
         .current_editable_matches
         .iter()
         .find(|editable_match| editable_match.match_id == selected_slot.match_id)?;
-    slot_player_id(editable_match, selected_slot.team_side, selected_slot.slot_index)
+    slot_player_id(
+        editable_match,
+        selected_slot.team_side,
+        selected_slot.slot_index,
+    )
 }
 
 fn draft_round(draft: Option<RoundPlayerChangeDraft>) -> Option<RoundNumber> {

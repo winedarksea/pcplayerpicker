@@ -129,7 +129,10 @@ impl SessionManager {
                     status: MatchStatus::Scheduled,
                 });
 
-                let participation_by_player: std::collections::HashMap<PlayerId, ParticipationStatus> = raw
+                let participation_by_player: std::collections::HashMap<
+                    PlayerId,
+                    ParticipationStatus,
+                > = raw
                     .team_a
                     .iter()
                     .chain(raw.team_b.iter())
@@ -144,9 +147,9 @@ impl SessionManager {
                     .iter()
                     .chain(raw.team_b.iter())
                     .filter_map(|participant| {
-                        name_to_id.get(&participant.name).and_then(|&id| {
-                            participant.player_points.map(|points| (id, points))
-                        })
+                        name_to_id
+                            .get(&participant.name)
+                            .and_then(|&id| participant.player_points.map(|points| (id, points)))
                     })
                     .collect();
                 let duration_multiplier =
@@ -205,10 +208,7 @@ impl SessionManager {
                     }
                 };
 
-                to_score.push((
-                    mid,
-                    match_result,
-                ));
+                to_score.push((mid, match_result));
             }
 
             // Batch all events for this round without intermediate materializations.

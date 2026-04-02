@@ -354,6 +354,16 @@ pub fn clamp_duration_multiplier(duration_multiplier: f64) -> f64 {
 }
 
 impl MatchResult {
+    pub fn matches_saved_score_content(&self, other: &Self) -> bool {
+        self.match_id == other.match_id
+            && self.participation_by_player == other.participation_by_player
+            && self.score_payload == other.score_payload
+            && self.entered_by == other.entered_by
+            && (self.normalized_duration_multiplier() - other.normalized_duration_multiplier())
+                .abs()
+                < 0.01
+    }
+
     pub fn new_points_per_player(
         match_id: MatchId,
         participation_by_player: HashMap<PlayerId, ParticipationStatus>,
@@ -485,7 +495,10 @@ impl MatchResult {
                         .map(|player_id| player_points.get(player_id).copied().unwrap_or(0))
                         .sum()
                 };
-                Some((team_points(&scheduled_match.team_a), team_points(&scheduled_match.team_b)))
+                Some((
+                    team_points(&scheduled_match.team_a),
+                    team_points(&scheduled_match.team_b),
+                ))
             }
             MatchScorePayload::PointsPerTeam {
                 team_a_points,
@@ -619,7 +632,7 @@ impl ParticipationStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MatchScorePayload {
     PointsPerPlayer {

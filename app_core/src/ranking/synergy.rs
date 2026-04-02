@@ -240,8 +240,10 @@ impl SynergyEngine {
                 continue;
             }
 
-            let team_a_played = played_team_indices(scheduled.team_a.as_slice(), result, &player_index);
-            let team_b_played = played_team_indices(scheduled.team_b.as_slice(), result, &player_index);
+            let team_a_played =
+                played_team_indices(scheduled.team_a.as_slice(), result, &player_index);
+            let team_b_played =
+                played_team_indices(scheduled.team_b.as_slice(), result, &player_index);
             if team_a_played.is_empty() && team_b_played.is_empty() {
                 continue;
             }
@@ -252,7 +254,10 @@ impl SynergyEngine {
             let target = team_a_points as f64 - team_b_points as f64;
 
             let mut features: Vec<(usize, f64)> = Vec::with_capacity(
-                team_a_played.len() + team_b_played.len() + pair_count(team_a_played.len()) + pair_count(team_b_played.len()),
+                team_a_played.len()
+                    + team_b_played.len()
+                    + pair_count(team_a_played.len())
+                    + pair_count(team_b_played.len()),
             );
 
             for &player_idx in &team_a_played {
@@ -694,7 +699,9 @@ mod tests {
 
         let match_refs: Vec<_> = matches.iter().collect();
         let result_refs: Vec<_> = results.iter().collect();
-        let mat = engine.compute(&players, &match_refs, &result_refs).expect("expected synergy");
+        let mat = engine
+            .compute(&players, &match_refs, &result_refs)
+            .expect("expected synergy");
 
         let exposure = mat.exposure(PlayerId(1), PlayerId(2)).unwrap();
         assert!((exposure - 1.5).abs() < 1e-10);
