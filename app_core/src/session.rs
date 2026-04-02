@@ -329,8 +329,7 @@ impl SessionManager {
     }
 
     pub fn lock_round(&mut self, round: RoundNumber) {
-        self.log
-            .append(Event::RoundLocked { round }, Role::Coach);
+        self.log.append(Event::RoundLocked { round }, Role::Coach);
         self.state = crate::events::materialize(&self.log);
     }
 

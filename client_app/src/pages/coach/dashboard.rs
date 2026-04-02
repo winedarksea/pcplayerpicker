@@ -27,8 +27,8 @@ use app_core::scheduler::{select_scheduler, ScheduleGenerationRequest};
 use leptos::prelude::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
-use std::rc::Rc;
 use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -846,39 +846,40 @@ pub fn ResultsTab() -> impl IntoView {
     let current_round_completion_state = {
         let ctx = ctx.clone();
         Memo::new(move |_| {
-            ctx.session.with(|session| -> Option<CurrentRoundCompletionState> {
-                let manager = session.as_ref()?;
-                let round = manager.state.current_round;
-                let current_round_matches: Vec<_> = manager
-                    .state
-                    .matches
-                    .values()
-                    .filter(|m| m.round == round)
-                    .collect();
-                if current_round_matches.is_empty() {
-                    return None;
-                }
+            ctx.session
+                .with(|session| -> Option<CurrentRoundCompletionState> {
+                    let manager = session.as_ref()?;
+                    let round = manager.state.current_round;
+                    let current_round_matches: Vec<_> = manager
+                        .state
+                        .matches
+                        .values()
+                        .filter(|m| m.round == round)
+                        .collect();
+                    if current_round_matches.is_empty() {
+                        return None;
+                    }
 
-                let non_voided_matches: Vec<_> = current_round_matches
-                    .iter()
-                    .copied()
-                    .filter(|m| m.status != MatchStatus::Voided)
-                    .collect();
-                let non_voided_matches_len = non_voided_matches.len();
-                let all_non_voided_scored = non_voided_matches
-                    .iter()
-                    .all(|m| manager.state.results.contains_key(&m.id));
-                let all_terminal = current_round_matches.iter().all(|m| {
-                    m.status == MatchStatus::Completed || m.status == MatchStatus::Voided
-                });
+                    let non_voided_matches: Vec<_> = current_round_matches
+                        .iter()
+                        .copied()
+                        .filter(|m| m.status != MatchStatus::Voided)
+                        .collect();
+                    let non_voided_matches_len = non_voided_matches.len();
+                    let all_non_voided_scored = non_voided_matches
+                        .iter()
+                        .all(|m| manager.state.results.contains_key(&m.id));
+                    let all_terminal = current_round_matches.iter().all(|m| {
+                        m.status == MatchStatus::Completed || m.status == MatchStatus::Voided
+                    });
 
-                Some(CurrentRoundCompletionState {
-                    round: round.0,
-                    non_voided_matches: non_voided_matches_len,
-                    all_terminal,
-                    all_non_voided_scored,
+                    Some(CurrentRoundCompletionState {
+                        round: round.0,
+                        non_voided_matches: non_voided_matches_len,
+                        all_terminal,
+                        all_non_voided_scored,
+                    })
                 })
-            })
         })
     };
 

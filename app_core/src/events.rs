@@ -152,9 +152,10 @@ fn derive_current_round(
     rounds.dedup();
 
     for round in &rounds {
-        let all_done = matches.values().filter(|m| m.round == *round).all(|m| {
-            m.status == MatchStatus::Completed || m.status == MatchStatus::Voided
-        });
+        let all_done = matches
+            .values()
+            .filter(|m| m.round == *round)
+            .all(|m| m.status == MatchStatus::Completed || m.status == MatchStatus::Voided);
 
         if !all_done {
             return *round;
