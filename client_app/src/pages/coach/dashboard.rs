@@ -79,7 +79,7 @@ fn validate_new_player_name(
 #[component]
 pub fn DashboardPage() -> impl IntoView {
     use_page_meta(
-        "Session Dashboard · PCPlayerPicker",
+        "Session Dashboard · PC Player Picker",
         "Manage schedules, score entry, rankings, and online sharing for an active session.",
     );
 

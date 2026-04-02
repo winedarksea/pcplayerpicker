@@ -6,7 +6,7 @@ use leptos_router::components::A;
 #[component]
 pub fn LandingPage() -> impl IntoView {
     use_page_meta(
-        "PCPlayerPicker",
+        "PC Player Picker",
         "Offline-first player ranking and active-learning match scheduling for team sessions.",
     );
 
@@ -51,7 +51,7 @@ pub fn LandingPage() -> impl IntoView {
                                 "Schedule better matches. Rank players, with uncertainty shown."
                             </h1>
                             <p class="mt-5 max-w-2xl text-lg leading-8 text-slate-300">
-                                "PCPlayerPicker is built for coaches running repeat small-sided games to evaluate players. It can also be used for quick, flexible tournaments."
+                                "PC Player Picker is built for coaches running repeat small-sided games to evaluate players. It can also be used for quick, flexible tournaments."
                             </p>
                             <div class="mt-8 flex flex-col gap-3 sm:flex-row">
                                 <A
@@ -170,7 +170,7 @@ pub fn LandingPage() -> impl IntoView {
 #[component]
 pub fn TutorialPage() -> impl IntoView {
     use_page_meta(
-        "Tutorial · PCPlayerPicker",
+        "Tutorial · PC Player Picker",
         "Quick-start guide for creating a session, entering scores, and reading rankings.",
     );
 
@@ -256,7 +256,7 @@ pub fn TutorialPage() -> impl IntoView {
 #[component]
 pub fn FaqPage() -> impl IntoView {
     use_page_meta(
-        "FAQ · PCPlayerPicker",
+        "FAQ · PC Player Picker",
         "FAQ covering privacy, offline behavior, rankings, substitutions, and support for different sports.",
     );
 
@@ -336,7 +336,7 @@ pub fn FaqPage() -> impl IntoView {
                     <div class="rounded-[24px] border border-white/10 bg-slate-900/60 p-6">
                         <h2 class="text-xl font-bold text-white">"Where is the source code?"</h2>
                         <p class="mt-3 leading-7 text-slate-300">
-                            "PCPlayerPicker is free and open-source. View the repository on "
+                            "PC Player Picker is free and open-source. View the repository on "
                             <a
                                 href="https://github.com/winedarksea/pcplayerpicker"
                                 target="_blank"
@@ -384,7 +384,7 @@ fn SiteNav() -> impl IntoView {
                         "PC"
                     </div>
                     <div>
-                        <p class="text-base font-bold tracking-[0.02em] text-white">"PCPlayerPicker"</p>
+                        <p class="text-base font-bold tracking-[0.02em] text-white">"PC Player Picker"</p>
                         <p class="text-xs uppercase tracking-[0.22em] text-slate-500">"Active Learning Sessions"</p>
                     </div>
                 </A>
@@ -430,7 +430,7 @@ fn SiteFooter() -> impl IntoView {
         <footer class="border-t border-white/10 bg-slate-950">
             <div class="mx-auto flex max-w-6xl flex-col gap-5 px-5 py-8 text-sm text-slate-400 sm:px-8 md:flex-row md:items-center md:justify-between">
                 <div>
-                    <p class="font-semibold text-slate-200">"PCPlayerPicker"</p>
+                    <p class="font-semibold text-slate-200">"PC Player Picker"</p>
                     <p class="mt-1">"Offline-first scheduling and ranking for matches, tryouts, and tournaments."</p>
                 </div>
                 <div class="flex flex-wrap items-center gap-4">
