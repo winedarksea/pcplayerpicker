@@ -406,9 +406,14 @@ where
                                     <button
                                         class=move || {
                                             let active = outcome_draft.get() == outcome;
+                                            let active_color = match outcome {
+                                                MatchOutcome::TeamAWin => "bg-blue-600 text-white",
+                                                MatchOutcome::TeamBWin => "bg-orange-500 text-white",
+                                                MatchOutcome::Draw => "bg-gray-600 text-white",
+                                            };
                                             format!(
                                                 "px-3 py-2 rounded text-sm font-medium min-h-[36px] {}",
-                                                if active { "bg-blue-600 text-white" }
+                                                if active { active_color }
                                                 else { "bg-gray-800 text-gray-400 hover:bg-gray-700" }
                                             )
                                         }
