@@ -266,6 +266,10 @@ pub fn FaqPage() -> impl IntoView {
             "Yes. Session setup, local persistence, scheduling, results entry, and ranking analysis are designed to work on the coach device without a network connection.",
         ),
         (
+            "How do I install it for offline use?",
+            "Open the app in your mobile browser, then use the browser install action (Install app / Add to Home Screen). After installing, launch from the home screen for the most reliable offline use.",
+        ),
+        (
             "What does 'going online' mean here?",
             "Going online means registering the session with the host server by clicking the 'Go Online' button. This enables features like recovery PINs and sharing session data by URL with Assistants and Players. Without clicking the go online button, the session data stays local to the coach device and won't be accessible from other devices or browsers. Going online is optional, other means of sharing a session are enabled, such as exporting csvs and copy-paste match schedules ready to share in group chat apps",
         ),
