@@ -18,11 +18,12 @@
   <circle cx="436" cy="104" r="42" fill="#fbbf24"/>
 
   <!-- Middle bar — 2 dots spanning full width -->
-  <rect x="106" y="208" width="300" height="96" rx="48" fill="#1e293b"/>
-  <circle cx="156" cy="256" r="42" fill="#5eead4"/>
-  <circle cx="356" cy="256" r="42" fill="#fbbf24"/>
+  <rect x="124" y="208" width="264" height="96" rx="48" fill="#1e293b"/>
+  <circle cx="166" cy="256" r="42" fill="#5eead4"/>
+  <circle cx="346" cy="256" r="42" fill="#fbbf24"/>
 
   <!-- Bottom bar (narrowest) — 1 dot at center -->
   <rect x="164" y="360" width="184" height="96" rx="48" fill="#1e293b"/>
   <circle cx="256" cy="408" r="42" fill="#34d399"/>
+  <!-- cd ~/Documents-NoCloud/pcplayerpicker/client_app && npm run build:icons -->
 </svg>
