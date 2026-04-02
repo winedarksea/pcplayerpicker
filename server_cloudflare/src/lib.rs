@@ -1527,6 +1527,7 @@ async fn handle_archive_session(
     #[derive(Deserialize)]
     struct ArchiveBody {
         sport: String,
+        score_entry_mode: String,
         team_size: u8,
         /// JSON object mapping player_id string → player name
         player_names: serde_json::Value,
@@ -1572,10 +1573,10 @@ async fn handle_archive_session(
 
     db.prepare(
         "INSERT INTO archived_sessions \
-             (id, sport, team_size, created_at, archived_at, player_names, final_rankings) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             (id, sport, score_entry_mode, team_size, created_at, archived_at, player_names, final_rankings) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
          ON CONFLICT(id) DO UPDATE SET \
-             sport=excluded.sport, team_size=excluded.team_size, \
+             sport=excluded.sport, score_entry_mode=excluded.score_entry_mode, team_size=excluded.team_size, \
              archived_at=excluded.archived_at, \
              player_names=excluded.player_names, \
              final_rankings=excluded.final_rankings",
@@ -1583,6 +1584,7 @@ async fn handle_archive_session(
     .bind(&[
         session_id.into(),
         body.sport.as_str().into(),
+        body.score_entry_mode.as_str().into(),
         d1_u32(body.team_size as u32),
         d1_number(created_at),
         d1_number(js_sys::Date::now()),

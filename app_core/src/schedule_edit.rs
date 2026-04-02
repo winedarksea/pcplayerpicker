@@ -401,12 +401,13 @@ mod tests {
     #[test]
     fn completed_match_duplicates_are_rejected() {
         let mut manager = build_manager_with_two_matches();
-        let completed_result = MatchResult {
-            match_id: MatchId(2),
-            scores: HashMap::new(),
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        };
+        let completed_result = MatchResult::new_points_per_player(
+            MatchId(2),
+            HashMap::new(),
+            HashMap::new(),
+            1.0,
+            Role::Coach,
+        );
         manager.enter_score(completed_result, Role::Coach);
 
         let updated_matches = vec![ScheduledMatch {

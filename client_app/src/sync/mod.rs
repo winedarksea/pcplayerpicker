@@ -483,6 +483,7 @@ pub async fn recover_session(session_id: &str, pin: &str) -> Result<EventsRespon
 #[derive(Serialize)]
 pub struct SessionArchive {
     pub sport: String,
+    pub score_entry_mode: String,
     pub team_size: u8,
     /// Map of player_id (as string) → player name, e.g. `{"1": "Alice", "2": "Bob"}`.
     pub player_names: HashMap<String, String>,

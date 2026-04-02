@@ -62,7 +62,7 @@ pub const CREATE_RESULTS_TABLE: &str = "
     CREATE TABLE IF NOT EXISTS results (
         match_id    INTEGER NOT NULL,
         session_id  TEXT NOT NULL REFERENCES sessions(id),
-        scores      TEXT NOT NULL,  -- JSON: { player_id: { goals: u16 | null } }
+        scores      TEXT NOT NULL,  -- JSON: { participation_by_player, score_payload, ... }
         duration_multiplier REAL NOT NULL DEFAULT 1.0,
         entered_by  TEXT NOT NULL,
         PRIMARY KEY (match_id, session_id)

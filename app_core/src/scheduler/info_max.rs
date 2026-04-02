@@ -288,7 +288,7 @@ mod tests {
                 rank: i as u32 + 1,
                 rank_range_90: (1, skills.len() as u32),
                 matches_played: 3,
-                total_goals: 5,
+                total_score: 5,
                 prob_top_k: 0.5,
                 is_active: true,
             })

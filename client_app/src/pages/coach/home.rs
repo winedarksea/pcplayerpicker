@@ -364,7 +364,8 @@ pub fn CoachHome() -> impl IntoView {
                                                             </span>
                                                             <div class="text-sm text-gray-400 mt-0.5">
                                                                 {s.player_count}" players · "
-                                                                {s.rounds_played}" rounds"
+                                                                {s.rounds_played}" rounds · "
+                                                                {s.score_entry_mode.clone()}
                                                             </div>
                                                         </div>
                                                         <span class="text-xs text-gray-500 shrink-0 ml-2 mt-0.5">

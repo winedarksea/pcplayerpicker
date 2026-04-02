@@ -323,6 +323,7 @@ pub fn load_session_ids() -> Vec<String> {
 pub struct SessionSummary {
     pub id: String,
     pub sport: String,
+    pub score_entry_mode: String,
     pub team_size: u8,
     pub player_count: usize,
     pub rounds_played: u32,
@@ -334,6 +335,7 @@ fn session_summary_from_manager(manager: &SessionManager) -> Option<SessionSumma
     Some(SessionSummary {
         id: config.id.to_string(),
         sport: config.sport.to_string(),
+        score_entry_mode: config.score_entry_mode.to_string(),
         team_size: config.team_size,
         player_count: manager.state.players.len(),
         rounds_played: manager.state.current_round.0.saturating_sub(1),

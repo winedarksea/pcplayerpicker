@@ -149,12 +149,12 @@ fn full_offline_simulation_converges() {
 
             match_id_counter += 1;
             manager.enter_score(
-                MatchResult {
-                    match_id: sched_match.id,
+                MatchResult::from_legacy_player_scores(
+                    sched_match.id,
                     scores,
-                    duration_multiplier: 1.0,
-                    entered_by: Role::Coach,
-                },
+                    1.0,
+                    Role::Coach,
+                ),
                 Role::Coach,
             );
         }
@@ -392,12 +392,7 @@ fn voided_match_excluded_from_rankings() {
         scores.insert(id, PlayerMatchScore::scored(2));
     }
     manager.enter_score(
-        MatchResult {
-            match_id: MatchId(1001),
-            scores,
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        },
+        MatchResult::from_legacy_player_scores(MatchId(1001), scores, 1.0, Role::Coach),
         Role::Coach,
     );
     assert_eq!(
@@ -457,12 +452,7 @@ fn score_correction_overrides_original() {
     scores.insert(ids[2], PlayerMatchScore::scored(0));
     scores.insert(ids[3], PlayerMatchScore::scored(0));
     manager.enter_score(
-        MatchResult {
-            match_id: MatchId(1001),
-            scores,
-            duration_multiplier: 1.0,
-            entered_by: Role::Coach,
-        },
+        MatchResult::from_legacy_player_scores(MatchId(1001), scores, 1.0, Role::Coach),
         Role::Coach,
     );
 
@@ -472,21 +462,21 @@ fn score_correction_overrides_original() {
     corrected.insert(ids[1], PlayerMatchScore::scored(5));
     corrected.insert(ids[2], PlayerMatchScore::scored(0));
     corrected.insert(ids[3], PlayerMatchScore::scored(0));
-    manager.correct_score(MatchResult {
-        match_id: MatchId(1001),
-        scores: corrected,
-        duration_multiplier: 1.0,
-        entered_by: Role::Coach,
-    });
+    manager.correct_score(MatchResult::from_legacy_player_scores(
+        MatchId(1001),
+        corrected,
+        1.0,
+        Role::Coach,
+    ));
 
     let result = manager.state.results.get(&MatchId(1001)).unwrap();
     assert_eq!(
-        result.scores[&ids[0]].goals,
+        result.individual_points_for_player(&ids[0]),
         Some(5),
         "corrected score should replace original"
     );
     assert_eq!(
-        result.scores[&ids[2]].goals,
+        result.individual_points_for_player(&ids[2]),
         Some(0),
         "opponent score should be as corrected"
     );
