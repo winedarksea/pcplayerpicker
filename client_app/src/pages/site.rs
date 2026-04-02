@@ -290,6 +290,10 @@ pub fn FaqPage() -> impl IntoView {
             "No. 2v2 soccer is the default use case, but team size and sport are configurable so the app can extend to other formats such as 1v1 or larger small-sided games.",
         ),
         (
+            "How accurate are the rankings and synergy scores?",
+            "While they provide a useful indication of performance, these measures lack insight into many confounding real world factors. Adding more matches improves accuracy but introduces other tradeoffs like increased fatigue. These numbers may anchor judgements but should never be the exclusive judgement of players.",
+        ),
+        (
             "What about privacy?",
             "Use initials, nicknames, or jersey numbers if you want less identifying data stored locally. The app is designed to keep the heavy lifting on the coach device, and online sharing is optional.",
         ),
@@ -301,7 +305,7 @@ pub fn FaqPage() -> impl IntoView {
             "Can I self-host this?",
             "Yes. The worker is thin and the core logic lives in Rust, so the sync layer can be replaced by another backend without touching the coach app.",
         ),
-                (
+        (
             "My online session is seeing quota limits, how do I prevent this?",
             "The current hosting plan has a maximum global pool of 100000 daily online session calls. That may sound like a lot, but with each schedule refresh from a player counting as a call, this can add up quickly. This should not stop usage of the main coach device. We recommend having a backup plan of sharing schedules over group chat apps. If you see this issue routinely, file an issue on GitHub (see below).",
         ),

@@ -1,18 +1,24 @@
 //! Primary Bayesian ranking engine.
 //!
-//! Model: each player has a latent log-skill θ_i. Raw goals/points are first
-//! converted into a tempered scoring signal that soft-caps individual volume,
-//! downweights unusually high-tempo matches, and gives a small shared bonus for
-//! team control. That signal then follows a Negative Binomial likelihood whose
-//! rate is modulated by team context (sum of teammate skills vs opponent
-//! skills). The posterior over all θ is approximated via warm-started Laplace
-//! (Newton-Raphson on the log-posterior), then used to derive rank
+//! Model: each player has a latent log-skill θ_i. Observations enter the
+//! likelihood as raw counts (not transformed), keeping the model a proper
+//! quasi-negative-binomial count model:
+//!
+//! - PointsPerTeam:  team_score ~ NB(rate = exp(Σ θ_i + pace_offset), r)
+//!                   One observation per team per match.
+//! - PointsPerPlayer: player_score ~ NB(rate = exp(θ_i + context + pace_offset), r)
+//!                   One observation per player per match.
+//! - WinDrawLose:   outcome ~ Bernoulli(σ(θ_i + context))  (logistic)
+//!
+//! Pace/control corrections are additive log-rate offsets in the linear
+//! predictor (not applied to k). The posterior over all θ is approximated via
+//! Laplace (Newton-Raphson on the log-posterior), then used to derive rank
 //! distributions via Monte Carlo.
 
 use super::RankingEngine;
 use crate::models::{
     MatchId, MatchResult, MatchScorePayload, Player, PlayerId, PlayerRanking, ScheduledMatch,
-    ScoreEntryMode, SessionConfig,
+    SessionConfig,
 };
 use nalgebra::{DMatrix, DVector};
 use std::collections::HashMap;
@@ -22,8 +28,9 @@ use std::collections::HashMap;
 const DEFAULT_DISPERSION: f64 = 3.0;
 
 /// Prior standard deviation on latent skill (log-scale).
-/// Roughly: e^(2*sigma) ≈ 7x difference in expected goal rate between ±2σ players.
-const PRIOR_SIGMA: f64 = 1.0;
+/// Tighter than 1.0 to prevent early jumpy rankings from a single extreme match.
+/// e^(2*0.7) ≈ 4x difference in expected rate between ±2σ players.
+const PRIOR_SIGMA: f64 = 0.7;
 
 /// Maximum Newton-Raphson iterations for MAP estimation.
 const MAX_ITER: usize = 50;
@@ -67,26 +74,31 @@ struct Posterior {
 }
 
 impl GoalModelEngine {
-    fn tempered_scoring_signal(
-        raw_goals: f64,
-        own_team_goals: f64,
-        opponent_team_goals: f64,
+    /// Additive log-rate offset applied to the linear predictor (not to k).
+    /// Encodes pace normalization and team-control bonus so the NB observation
+    /// remains a proper raw count.
+    fn match_predictor_offset(
+        own_team_points: f64,
+        opponent_team_points: f64,
         players_in_match: usize,
         own_team_size: usize,
     ) -> f64 {
-        let softened_goals = raw_goals.ln_1p();
-        let total_points = own_team_goals + opponent_team_goals;
+        let total_points = own_team_points + opponent_team_points;
         let reference_points = players_in_match.max(1) as f64;
-        let pace_factor = (reference_points / total_points.max(reference_points)).sqrt();
-        let match_control_bonus = if own_team_goals > opponent_team_goals {
+        // Downweight high-scoring sessions: offset is negative when total > ref.
+        let pace_log_offset = if total_points > reference_points {
+            0.5 * (reference_points / total_points).ln()
+        } else {
+            0.0
+        };
+        let control_offset = if own_team_points > opponent_team_points {
             MATCH_CONTROL_BONUS_WEIGHT
-                * ((own_team_goals + 1.0) / (opponent_team_goals + 1.0)).ln()
+                * ((own_team_points + 1.0) / (opponent_team_points + 1.0)).ln()
                 / own_team_size.max(1) as f64
         } else {
             0.0
         };
-
-        pace_factor * (softened_goals + match_control_bonus)
+        pace_log_offset + control_offset
     }
 
     /// Fit the Laplace posterior given all completed, non-voided results.
@@ -96,7 +108,6 @@ impl GoalModelEngine {
         players: &[Player],
         results: &[&MatchResult],
         matches_by_id: Option<&HashMap<MatchId, ScheduledMatch>>,
-        config: &SessionConfig,
     ) -> Option<Posterior> {
         if results.is_empty() || players.is_empty() {
             return None;
@@ -121,7 +132,6 @@ impl GoalModelEngine {
                 matches_by_id,
                 results,
                 n,
-                config,
             );
             let grad_norm = grad.norm();
             if grad_norm < GRAD_TOL {
@@ -149,7 +159,6 @@ impl GoalModelEngine {
                 matches_by_id,
                 results,
                 n,
-                config,
             )
             .1
         });
@@ -168,6 +177,11 @@ impl GoalModelEngine {
     /// Compute gradient and Hessian of the log-posterior w.r.t. theta.
     /// log p(θ|data) = log p(data|θ) + log p(θ)
     ///   where log p(θ) = -sum_i θ_i² / (2σ²)  (Gaussian prior)
+    ///
+    /// Likelihood branches on the match score payload type:
+    ///   PointsPerTeam   — one NB observation per team; mu = Σ θ_i + pace_offset
+    ///   PointsPerPlayer — one NB observation per player; mu = θ_i + context + pace_offset
+    ///   WinDrawLose     — per-player logistic (unchanged)
     fn log_posterior_grad_hessian(
         &self,
         theta: &DVector<f64>,
@@ -175,141 +189,223 @@ impl GoalModelEngine {
         matches_by_id: Option<&HashMap<MatchId, ScheduledMatch>>,
         results: &[&MatchResult],
         n: usize,
-        config: &SessionConfig,
     ) -> (DVector<f64>, DMatrix<f64>) {
         let mut grad = DVector::zeros(n);
         let mut hess = DMatrix::zeros(n, n);
 
-        // Likelihood contributions from each player's observed contribution in each match.
         for result in results {
             let w = result.normalized_duration_multiplier();
-            for (player_id, participation_status) in &result.participation_by_player {
-                if !participation_status.played() {
-                    continue;
-                }
-                let Some(&i) = player_index.get(player_id) else {
-                    continue;
-                };
+            let match_ctx = matches_by_id.and_then(|m| m.get(&result.match_id));
 
-                let mut coeffs: Vec<(usize, f64)> = vec![(i, 1.0)];
-                let match_ctx = matches_by_id.and_then(|m| m.get(&result.match_id));
+            match &result.score_payload {
+                // ── Win / Draw / Lose ────────────────────────────────────────
+                MatchScorePayload::WinDrawLose { .. } => {
+                    let Some(match_ctx) = match_ctx else { continue };
+                    for (player_id, participation_status) in &result.participation_by_player {
+                        if !participation_status.played() {
+                            continue;
+                        }
+                        let Some(&i) = player_index.get(player_id) else { continue };
 
-                if let Some(match_ctx) = match_ctx {
-                    let (teammates, opponents): (&[PlayerId], &[PlayerId]) =
-                        if match_ctx.team_a.contains(player_id) {
-                            (&match_ctx.team_a, &match_ctx.team_b)
-                        } else if match_ctx.team_b.contains(player_id) {
-                            (&match_ctx.team_b, &match_ctx.team_a)
-                        } else {
-                            (&[], &[])
+                        let mut coeffs: Vec<(usize, f64)> = vec![(i, 1.0)];
+                        let (teammates, opponents): (&[PlayerId], &[PlayerId]) =
+                            if match_ctx.team_a.contains(player_id) {
+                                (&match_ctx.team_a, &match_ctx.team_b)
+                            } else if match_ctx.team_b.contains(player_id) {
+                                (&match_ctx.team_b, &match_ctx.team_a)
+                            } else {
+                                (&[], &[])
+                            };
+                        let mut add_group = |group: &[PlayerId], total_weight: f64| {
+                            let peers: Vec<usize> = group
+                                .iter()
+                                .filter(|&&pid| pid != *player_id)
+                                .filter_map(|pid| player_index.get(pid).copied())
+                                .collect();
+                            if peers.is_empty() {
+                                return;
+                            }
+                            let each = total_weight / peers.len() as f64;
+                            coeffs.extend(peers.into_iter().map(|idx| (idx, each)));
                         };
+                        add_group(teammates, TEAMMATE_CONTEXT_WEIGHT);
+                        add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
 
-                    let mut add_group = |group: &[PlayerId], total_weight: f64| {
-                        let peers: Vec<usize> = group
+                        let mu_i: f64 = coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
+                        let Some(observed_outcome) =
+                            result.team_outcome_value_for_player(player_id, match_ctx)
+                        else {
+                            continue;
+                        };
+                        let win_prob = 1.0 / (1.0 + (-mu_i).exp());
+                        let dl_dmu = observed_outcome - win_prob;
+                        let d2l_dmu2 = -win_prob * (1.0 - win_prob);
+                        for (j, c_j) in &coeffs {
+                            grad[*j] += w * dl_dmu * *c_j;
+                        }
+                        for (j, c_j) in &coeffs {
+                            for (k_idx, c_k) in &coeffs {
+                                hess[(*j, *k_idx)] += w * d2l_dmu2 * *c_j * *c_k;
+                            }
+                        }
+                    }
+                }
+
+                // ── Points Per Team: one NB observation per team ─────────────
+                MatchScorePayload::PointsPerTeam {
+                    team_a_points,
+                    team_b_points,
+                } => {
+                    let Some(match_ctx) = match_ctx else { continue };
+
+                    let total_points = (*team_a_points + *team_b_points) as f64;
+                    let n_playing_a = match_ctx
+                        .team_a
+                        .iter()
+                        .filter(|pid| result.player_played(pid))
+                        .count();
+                    let n_playing_b = match_ctx
+                        .team_b
+                        .iter()
+                        .filter(|pid| result.player_played(pid))
+                        .count();
+                    let reference_points = (n_playing_a + n_playing_b).max(1) as f64;
+                    let pace_log_offset = if total_points > reference_points {
+                        0.5 * (reference_points / total_points).ln()
+                    } else {
+                        0.0
+                    };
+
+                    for (team, k_raw) in [
+                        (&match_ctx.team_a, *team_a_points),
+                        (&match_ctx.team_b, *team_b_points),
+                    ] {
+                        let team_indices: Vec<usize> = team
                             .iter()
-                            .filter(|&&pid| pid != *player_id)
+                            .filter(|pid| result.player_played(pid))
                             .filter_map(|pid| player_index.get(pid).copied())
                             .collect();
-                        if peers.is_empty() {
-                            return;
+                        if team_indices.is_empty() {
+                            continue;
                         }
-                        let each = total_weight / peers.len() as f64;
-                        coeffs.extend(peers.into_iter().map(|idx| (idx, each)));
-                    };
 
-                    add_group(teammates, TEAMMATE_CONTEXT_WEIGHT);
-                    add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
-                }
+                        let mu_linear: f64 = team_indices.iter().map(|&i| theta[i]).sum();
+                        let lambda = (mu_linear + pace_log_offset).exp();
+                        let k = k_raw as f64;
+                        let r = self.dispersion;
 
-                let mu_i: f64 = coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
+                        let dl_dlambda = k / lambda - (r + k) / (r + lambda);
+                        let dl_dmu = dl_dlambda * lambda;
+                        for &i in &team_indices {
+                            grad[i] += w * dl_dmu;
+                        }
 
-                if config.score_entry_mode == ScoreEntryMode::WinDrawLose {
-                    let Some(match_ctx) = match_ctx else {
-                        continue;
-                    };
-                    let Some(observed_outcome) =
-                        result.team_outcome_value_for_player(player_id, match_ctx)
-                    else {
-                        continue;
-                    };
-                    let win_probability = 1.0 / (1.0 + (-mu_i).exp());
-                    let dl_dmu = observed_outcome - win_probability;
-                    let d2l_dmu2 = -win_probability * (1.0 - win_probability);
-                    for (j, c_j) in &coeffs {
-                        grad[*j] += w * dl_dmu * *c_j;
-                    }
-                    for (j, c_j) in &coeffs {
-                        for (k, c_k) in &coeffs {
-                            hess[(*j, *k)] += w * d2l_dmu2 * *c_j * *c_k;
+                        let d2l_dlambda2 =
+                            -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
+                        let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
+                        for &i in &team_indices {
+                            for &j in &team_indices {
+                                hess[(i, j)] += w * d2l_dmu2;
+                            }
                         }
                     }
-                    continue;
                 }
 
-                let raw_points = match (&result.score_payload, match_ctx) {
-                    (MatchScorePayload::PointsPerPlayer { .. }, _) => {
-                        result.individual_points_for_player(player_id).map(|points| points as f64)
-                    }
-                    (MatchScorePayload::PointsPerTeam { .. }, Some(match_ctx)) => result
-                        .team_points_for_player(player_id, match_ctx)
-                        .map(|points| points as f64),
-                    _ => None,
-                };
-                let Some(raw_points) = raw_points else {
-                    continue;
-                };
+                // ── Points Per Player: one NB observation per player ─────────
+                MatchScorePayload::PointsPerPlayer { player_points } => {
+                    for (player_id, participation_status) in &result.participation_by_player {
+                        if !participation_status.played() {
+                            continue;
+                        }
+                        let Some(&i) = player_index.get(player_id) else { continue };
+                        let Some(&raw_pts) = player_points.get(player_id) else { continue };
+                        let k = raw_pts as f64;
 
-                let mut effective_points = raw_points.ln_1p();
-                if let Some(match_ctx) = match_ctx {
-                    let own_team_points = result
-                        .team_points_for_player(player_id, match_ctx)
-                        .map(|points| points as f64)
-                        .unwrap_or(raw_points);
-                    let opponent_team_points = result
-                        .opponent_team_points_for_player(player_id, match_ctx)
-                        .map(|points| points as f64)
-                        .unwrap_or(0.0);
-                    let own_team = if match_ctx.team_a.contains(player_id) {
-                        &match_ctx.team_a
-                    } else {
-                        &match_ctx.team_b
-                    };
-                    let opponent_team = if match_ctx.team_a.contains(player_id) {
-                        &match_ctx.team_b
-                    } else {
-                        &match_ctx.team_a
-                    };
-                    let own_team_size = own_team
-                        .iter()
-                        .filter(|pid| result.player_played(pid))
-                        .count();
-                    let opponent_team_size = opponent_team
-                        .iter()
-                        .filter(|pid| result.player_played(pid))
-                        .count();
-                    effective_points = Self::tempered_scoring_signal(
-                        raw_points,
-                        own_team_points,
-                        opponent_team_points,
-                        own_team_size + opponent_team_size,
-                        own_team_size,
-                    );
-                }
+                        // Linear predictor with teammate/opponent context.
+                        let mut coeffs: Vec<(usize, f64)> = vec![(i, 1.0)];
+                        if let Some(match_ctx) = match_ctx {
+                            let (teammates, opponents): (&[PlayerId], &[PlayerId]) =
+                                if match_ctx.team_a.contains(player_id) {
+                                    (&match_ctx.team_a, &match_ctx.team_b)
+                                } else if match_ctx.team_b.contains(player_id) {
+                                    (&match_ctx.team_b, &match_ctx.team_a)
+                                } else {
+                                    (&[], &[])
+                                };
+                            let mut add_group = |group: &[PlayerId], total_weight: f64| {
+                                let peers: Vec<usize> = group
+                                    .iter()
+                                    .filter(|&&pid| pid != *player_id)
+                                    .filter_map(|pid| player_index.get(pid).copied())
+                                    .collect();
+                                if peers.is_empty() {
+                                    return;
+                                }
+                                let each = total_weight / peers.len() as f64;
+                                coeffs.extend(peers.into_iter().map(|idx| (idx, each)));
+                            };
+                            add_group(teammates, TEAMMATE_CONTEXT_WEIGHT);
+                            add_group(opponents, -OPPONENT_CONTEXT_WEIGHT);
+                        }
 
-                let lambda = mu_i.exp();
-                let r = self.dispersion;
-                let k = effective_points;
-                let dl_dlambda = k / lambda - (r + k) / (r + lambda);
-                let dl_dmu = dl_dlambda * lambda;
-                for (j, c_j) in &coeffs {
-                    grad[*j] += w * dl_dmu * *c_j;
-                }
+                        let mu_linear: f64 =
+                            coeffs.iter().map(|(idx, c)| theta[*idx] * *c).sum();
 
-                let d2l_dlambda2 = -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
-                let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
-                for (j, c_j) in &coeffs {
-                    for (k, c_k) in &coeffs {
-                        hess[(*j, *k)] += w * d2l_dmu2 * *c_j * *c_k;
+                        // Pace and control corrections as additive log-rate offsets.
+                        let predictor_offset = if let Some(match_ctx) = match_ctx {
+                            let own_team_points = result
+                                .team_points_for_player(player_id, match_ctx)
+                                .map(|p| p as f64)
+                                .unwrap_or(k);
+                            let opponent_team_points = result
+                                .opponent_team_points_for_player(player_id, match_ctx)
+                                .map(|p| p as f64)
+                                .unwrap_or(0.0);
+                            let own_team = if match_ctx.team_a.contains(player_id) {
+                                &match_ctx.team_a
+                            } else {
+                                &match_ctx.team_b
+                            };
+                            let opponent_team = if match_ctx.team_a.contains(player_id) {
+                                &match_ctx.team_b
+                            } else {
+                                &match_ctx.team_a
+                            };
+                            let own_team_size = own_team
+                                .iter()
+                                .filter(|pid| result.player_played(pid))
+                                .count();
+                            let opponent_team_size = opponent_team
+                                .iter()
+                                .filter(|pid| result.player_played(pid))
+                                .count();
+                            Self::match_predictor_offset(
+                                own_team_points,
+                                opponent_team_points,
+                                own_team_size + opponent_team_size,
+                                own_team_size,
+                            )
+                        } else {
+                            0.0
+                        };
+
+                        let lambda = (mu_linear + predictor_offset).exp();
+                        let r = self.dispersion;
+
+                        let dl_dlambda = k / lambda - (r + k) / (r + lambda);
+                        let dl_dmu = dl_dlambda * lambda;
+                        for (j, c_j) in &coeffs {
+                            grad[*j] += w * dl_dmu * *c_j;
+                        }
+
+                        let d2l_dlambda2 =
+                            -k / lambda.powi(2) + (r + k) / (r + lambda).powi(2);
+                        let d2l_dmu2 = d2l_dlambda2 * lambda.powi(2) + dl_dlambda * lambda;
+                        for (j, c_j) in &coeffs {
+                            for (k_idx, c_k) in &coeffs {
+                                hess[(*j, *k_idx)] += w * d2l_dmu2 * *c_j * *c_k;
+                            }
+                        }
                     }
                 }
             }
@@ -425,7 +521,7 @@ impl RankingEngine for GoalModelEngine {
             })
             .collect();
 
-        let posterior = match self.fit(players, results, matches_by_id, config) {
+        let posterior = match self.fit(players, results, matches_by_id) {
             Some(p) => p,
             None => return default_rankings,
         };
@@ -754,83 +850,25 @@ mod tests {
     }
 
     #[test]
-    fn tempered_scoring_signal_downweights_high_scoring_close_matches() {
-        let low_total = GoalModelEngine::tempered_scoring_signal(5.0, 10.0, 8.0, 4, 2);
-        let high_total = GoalModelEngine::tempered_scoring_signal(10.0, 20.0, 16.0, 4, 2);
+    fn match_predictor_offset_is_more_negative_for_high_scoring_matches() {
+        // Pace offset should be more negative (lower expected rate) when the
+        // total points far exceed the reference level.
+        let low_offset = GoalModelEngine::match_predictor_offset(10.0, 8.0, 4, 2);
+        let high_offset = GoalModelEngine::match_predictor_offset(20.0, 16.0, 4, 2);
         assert!(
-            high_total < low_total * 1.35,
-            "high-scoring close matches should not create proportionally larger evidence: low={low_total:.3}, high={high_total:.3}"
+            high_offset < low_offset,
+            "high-scoring match should have a more negative log-rate offset: low={low_offset:.3}, high={high_offset:.3}"
         );
     }
 
     #[test]
-    fn tempered_scoring_signal_gives_small_credit_for_team_control() {
-        let scoreless_winner = GoalModelEngine::tempered_scoring_signal(0.0, 5.0, 0.0, 4, 2);
-        let scoreless_loser = GoalModelEngine::tempered_scoring_signal(0.0, 0.0, 5.0, 4, 2);
-        assert!(scoreless_winner > 0.0);
-        assert_eq!(scoreless_loser, 0.0);
-    }
-
-    #[test]
-    fn high_scoring_point_marathons_do_not_expand_rating_gaps_like_raw_counts() {
-        use std::collections::HashMap;
-
-        let engine = GoalModelEngine::default();
-        let config = make_config();
-        let players = vec![
-            make_player(1, "A"),
-            make_player(2, "B"),
-            make_player(3, "C"),
-            make_player(4, "D"),
-        ];
-        let scheduled_match = ScheduledMatch {
-            id: MatchId(1),
-            round: RoundNumber(1),
-            field: 1,
-            team_a: vec![PlayerId(1), PlayerId(2)],
-            team_b: vec![PlayerId(3), PlayerId(4)],
-            status: MatchStatus::Completed,
-        };
-        let matches_by_id = HashMap::from([(scheduled_match.id, scheduled_match)]);
-
-        let low_scoring_results: Vec<MatchResult> = (0..6)
-            .map(|_| legacy_result(1, vec![(1, 6), (2, 5), (3, 5), (4, 4)]))
-            .collect();
-        let high_scoring_results: Vec<MatchResult> = (0..6)
-            .map(|_| legacy_result(1, vec![(1, 12), (2, 10), (3, 10), (4, 8)]))
-            .collect();
-
-        let low_refs: Vec<_> = low_scoring_results.iter().collect();
-        let high_refs: Vec<_> = high_scoring_results.iter().collect();
-        let low_rankings =
-            engine.compute_ratings(&players, &low_refs, Some(&matches_by_id), &config);
-        let high_rankings =
-            engine.compute_ratings(&players, &high_refs, Some(&matches_by_id), &config);
-
-        let low_gap = low_rankings
-            .iter()
-            .find(|ranking| ranking.player_id == PlayerId(1))
-            .unwrap()
-            .rating
-            - low_rankings
-                .iter()
-                .find(|ranking| ranking.player_id == PlayerId(4))
-                .unwrap()
-                .rating;
-        let high_gap = high_rankings
-            .iter()
-            .find(|ranking| ranking.player_id == PlayerId(1))
-            .unwrap()
-            .rating
-            - high_rankings
-                .iter()
-                .find(|ranking| ranking.player_id == PlayerId(4))
-                .unwrap()
-                .rating;
-
+    fn match_predictor_offset_gives_control_bonus_to_winning_team_only() {
+        // Winning team gets a positive control component; losing team does not.
+        let winner_offset = GoalModelEngine::match_predictor_offset(5.0, 0.0, 4, 2);
+        let loser_offset = GoalModelEngine::match_predictor_offset(0.0, 5.0, 4, 2);
         assert!(
-            high_gap <= low_gap * 1.20,
-            "high-scoring marathons should not create much larger rating gaps: low={low_gap:.3}, high={high_gap:.3}"
+            winner_offset > loser_offset,
+            "winning team should have a higher predictor offset: winner={winner_offset:.3}, loser={loser_offset:.3}"
         );
     }
 }
