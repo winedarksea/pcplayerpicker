@@ -89,7 +89,7 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
-      await cache.addAll(APP_SHELL);
+      await Promise.all(APP_SHELL.map((path) => cache.add(path).catch(() => undefined)));
       await precacheBuildAssets(cache);
       await self.skipWaiting();
     })(),
@@ -125,15 +125,28 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (!response.ok) {
-            return cachedNavigationResponse();
-          }
-          caches.open(CACHE_NAME).then((cache) => cacheSanitizedIndex(cache, response.clone()));
-          return response;
-        })
-        .catch(() => cachedNavigationResponse()),
+      (async () => {
+        const cachedIndex = await caches.match("/index.html");
+        const cachedRoot = await caches.match("/");
+        const cached = cachedIndex || cachedRoot;
+
+        // Keep navigation launch fully offline-first once shell exists; refresh cache in background.
+        const refresh = fetch(request)
+          .then((response) => {
+            if (!response.ok) {
+              return cachedNavigationResponse();
+            }
+            caches.open(CACHE_NAME).then((cache) => cacheSanitizedIndex(cache, response.clone()));
+            return response;
+          })
+          .catch(() => cachedNavigationResponse());
+
+        if (cached) {
+          refresh.catch(() => undefined);
+          return cached;
+        }
+        return refresh;
+      })(),
     );
     return;
   }
