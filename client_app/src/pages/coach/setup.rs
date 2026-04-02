@@ -23,6 +23,14 @@ fn score_entry_mode_help_text(mode: ScoreEntryMode) -> &'static str {
     }
 }
 
+fn score_entry_mode_tooltip_id(mode: ScoreEntryMode) -> &'static str {
+    match mode {
+        ScoreEntryMode::PointsPerPlayer => "score-entry-mode-help-points-per-player",
+        ScoreEntryMode::PointsPerTeam => "score-entry-mode-help-points-per-team",
+        ScoreEntryMode::WinDrawLose => "score-entry-mode-help-win-draw-lose",
+    }
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 #[component]
@@ -215,10 +223,11 @@ pub fn SetupPage() -> impl IntoView {
                             .into_iter()
                             .map(|mode| {
                                 let help_text = score_entry_mode_help_text(mode);
+                                let tooltip_id = score_entry_mode_tooltip_id(mode);
                                 view! {
                                     <button
                                         class=move || {
-                                            let base = "relative px-4 py-3 pr-10 rounded-xl border font-semibold \
+                                            let base = "score-entry-mode-card relative px-4 py-3 pr-10 rounded-xl border font-semibold \
                                                         text-sm transition-colors min-h-[48px]";
                                             if score_entry_mode.get() == mode {
                                                 format!("{base} bg-blue-600 border-blue-500 text-white")
@@ -227,17 +236,18 @@ pub fn SetupPage() -> impl IntoView {
                                                         text-gray-300 hover:border-gray-500")
                                             }
                                         }
+                                        title=help_text
+                                        aria-describedby=tooltip_id
                                         on:click=move |_| score_entry_mode.set(mode)
                                     >
                                         <span>{mode.to_string()}</span>
                                         <span
                                             class="score-entry-mode-info-anchor absolute top-2.5 right-2.5"
-                                            tabindex="0"
-                                            aria-label=help_text
-                                            title=help_text
+                                            aria-hidden="true"
                                         >
                                             <span class="score-entry-mode-info-icon">"i"</span>
                                             <span
+                                                id=tooltip_id
                                                 class="score-entry-mode-info-tooltip w-56 text-left"
                                                 role="tooltip"
                                             >

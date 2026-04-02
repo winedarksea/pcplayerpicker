@@ -38,8 +38,9 @@
     @apply pointer-events-none absolute right-0 top-full z-10 mt-2 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-medium text-gray-200 shadow-xl opacity-0 transition-opacity duration-150;
   }
 
-  .score-entry-mode-info-anchor:hover .score-entry-mode-info-tooltip,
-  .score-entry-mode-info-anchor:focus-visible .score-entry-mode-info-tooltip {
+  .score-entry-mode-card:hover .score-entry-mode-info-tooltip,
+  .score-entry-mode-card:focus-visible .score-entry-mode-info-tooltip,
+  .score-entry-mode-card:focus-within .score-entry-mode-info-tooltip {
     @apply opacity-100;
   }
 
