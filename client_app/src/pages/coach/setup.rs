@@ -36,7 +36,7 @@ fn score_entry_mode_tooltip_id(mode: ScoreEntryMode) -> &'static str {
 #[component]
 pub fn SetupPage() -> impl IntoView {
     use_page_meta(
-        "New Session · PCPlayerPicker",
+        "New Session · PC Player Picker",
         "Configure players, scheduling cadence, and field needs for a new session.",
     );
 
