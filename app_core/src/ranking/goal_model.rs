@@ -39,6 +39,12 @@ const GRAD_TOL: f64 = 1e-6;
 const TEAMMATE_CONTEXT_WEIGHT: f64 = 0.35;
 const OPPONENT_CONTEXT_WEIGHT: f64 = 0.35;
 
+/// Conservative display score = mu - k*sigma.
+const CONSERVATIVE_RATING_SIGMA_MULTIPLIER: f64 = 1.0;
+
+/// Per-completed-round process noise for inactive or infrequently seen players.
+const INACTIVITY_PROCESS_SIGMA_PER_ROUND: f64 = 0.12;
+
 pub struct GoalModelEngine {
     /// NB dispersion parameter
     pub dispersion: f64,
@@ -66,6 +72,10 @@ struct Posterior {
 }
 
 impl GoalModelEngine {
+    fn conservative_rating(theta_mean: f64, theta_uncertainty: f64) -> f64 {
+        theta_mean - CONSERVATIVE_RATING_SIGMA_MULTIPLIER * theta_uncertainty
+    }
+
     fn append_weighted_group_coefficients(
         coeffs: &mut Vec<(usize, f64)>,
         group: &[PlayerId],
@@ -91,6 +101,64 @@ impl GoalModelEngine {
                 .into_iter()
                 .map(|player_idx| (player_idx, weight_per_peer)),
         );
+    }
+
+    fn latest_completed_round(
+        results: &[&MatchResult],
+        matches_by_id: Option<&HashMap<MatchId, ScheduledMatch>>,
+    ) -> Option<u32> {
+        matches_by_id.and_then(|match_lookup| {
+            results
+                .iter()
+                .filter_map(|result| {
+                    match_lookup
+                        .get(&result.match_id)
+                        .map(|scheduled_match| scheduled_match.round.0)
+                })
+                .max()
+        })
+    }
+
+    fn last_completed_round_played_by_player(
+        player_id: PlayerId,
+        results: &[&MatchResult],
+        matches_by_id: Option<&HashMap<MatchId, ScheduledMatch>>,
+    ) -> Option<u32> {
+        matches_by_id.and_then(|match_lookup| {
+            results
+                .iter()
+                .filter(|result| result.player_played(&player_id))
+                .filter_map(|result| {
+                    match_lookup
+                        .get(&result.match_id)
+                        .map(|scheduled_match| scheduled_match.round.0)
+                })
+                .max()
+        })
+    }
+
+    fn inactive_rounds_since_last_completed_match(
+        player: &Player,
+        results: &[&MatchResult],
+        matches_by_id: Option<&HashMap<MatchId, ScheduledMatch>>,
+    ) -> u32 {
+        let Some(latest_completed_round) = Self::latest_completed_round(results, matches_by_id)
+        else {
+            return 0;
+        };
+        let reference_round =
+            Self::last_completed_round_played_by_player(player.id, results, matches_by_id)
+                .unwrap_or(player.joined_at_round.0.saturating_sub(1));
+        latest_completed_round.saturating_sub(reference_round)
+    }
+
+    fn variance_with_inactivity_drift(
+        base_variance: f64,
+        inactive_rounds: u32,
+        prior_variance: f64,
+    ) -> f64 {
+        let process_variance = INACTIVITY_PROCESS_SIGMA_PER_ROUND.powi(2);
+        (base_variance + inactive_rounds as f64 * process_variance).min(prior_variance)
     }
 
     /// Fit the Laplace posterior given all completed, non-voided results.
@@ -449,6 +517,7 @@ impl RankingEngine for GoalModelEngine {
             .map(|p| PlayerRanking {
                 player_id: p.id,
                 rating: 0.0,
+                conservative_rating: Self::conservative_rating(0.0, prior_var.sqrt()),
                 uncertainty: prior_var.sqrt(),
                 rank: 1,
                 rank_range_90: (1, n as u32),
@@ -484,6 +553,7 @@ impl RankingEngine for GoalModelEngine {
                     return PlayerRanking {
                         player_id: player.id,
                         rating: 0.0,
+                        conservative_rating: Self::conservative_rating(0.0, prior_var.sqrt()),
                         uncertainty: prior_var.sqrt(),
                         rank: 1,
                         rank_range_90: (1, n as u32),
@@ -499,18 +569,18 @@ impl RankingEngine for GoalModelEngine {
                     theta_mean = 0.0;
                 }
 
-                // Widen uncertainty for inactive players: their skill estimate is
-                // "as of last match" and becomes less reliable with time.
-                // A fixed 1.5× multiplier is a conservative first approximation.
                 let base_var = posterior.covariance[(idx, idx)];
-                let mut theta_var = if player.status == crate::models::PlayerStatus::Inactive {
-                    base_var * 1.5
-                } else {
-                    base_var
-                };
+                let inactive_rounds = Self::inactive_rounds_since_last_completed_match(
+                    player,
+                    results,
+                    matches_by_id,
+                );
+                let mut theta_var =
+                    Self::variance_with_inactivity_drift(base_var, inactive_rounds, prior_var);
                 if !theta_var.is_finite() || theta_var < 0.0 {
                     theta_var = prior_var;
                 }
+                let theta_uncertainty = theta_var.sqrt();
 
                 let samples = &rank_samples[idx];
                 let mut sorted_ranks = samples.clone();
@@ -563,7 +633,8 @@ impl RankingEngine for GoalModelEngine {
                 PlayerRanking {
                     player_id: player.id,
                     rating: theta_mean,
-                    uncertainty: theta_var.sqrt(),
+                    conservative_rating: Self::conservative_rating(theta_mean, theta_uncertainty),
+                    uncertainty: theta_uncertainty,
                     rank: p50,
                     rank_range_90: (p5, p95),
                     matches_played,
@@ -844,6 +915,9 @@ mod tests {
         assert!(rankings
             .iter()
             .all(|ranking| ranking.rank_range_90 == (1, 5)));
+        assert!(rankings.iter().all(|ranking| {
+            (ranking.conservative_rating - (ranking.rating - ranking.uncertainty)).abs() < 1e-9
+        }));
     }
 
     #[test]
@@ -1115,6 +1189,108 @@ mod tests {
         assert!(
             (full_match_rating - half_match_rating).abs() < 0.15,
             "equal scoring rates at different durations should stay close when duration is exposure: full={full_match_rating:.3}, half={half_match_rating:.3}"
+        );
+    }
+
+    #[test]
+    fn conservative_rating_is_mean_minus_uncertainty_penalty() {
+        let engine = GoalModelEngine::default();
+        let config = make_config_with_team_size(1);
+        let players = vec![make_player(1, "Scorer"), make_player(2, "Opponent")];
+        let results: Vec<MatchResult> = (0..6)
+            .map(|match_id| legacy_result(match_id, vec![(1, 2), (2, 0)]))
+            .collect();
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+
+        let rankings = engine.compute_ratings(&players, &result_refs, None, &config);
+        let scorer = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap();
+
+        assert!(
+            (scorer.conservative_rating - (scorer.rating - scorer.uncertainty)).abs() < 1e-9,
+            "conservative rating should be mean minus one uncertainty unit: conservative={:.6}, rating={:.6}, uncertainty={:.6}",
+            scorer.conservative_rating,
+            scorer.rating,
+            scorer.uncertainty
+        );
+    }
+
+    #[test]
+    fn missing_completed_rounds_increase_uncertainty_for_stale_players() {
+        let engine = GoalModelEngine::default();
+        let config = make_config_with_team_size(1);
+        let players = vec![
+            make_player(1, "EarlyHotStart"),
+            make_player(2, "AlwaysPlaying"),
+            make_player(3, "Opponent"),
+        ];
+        let matches_by_id: HashMap<MatchId, ScheduledMatch> = vec![
+            ScheduledMatch {
+                id: MatchId(1),
+                round: RoundNumber(1),
+                field: 1,
+                team_a: vec![PlayerId(1)],
+                team_b: vec![PlayerId(3)],
+                status: MatchStatus::Completed,
+            },
+            ScheduledMatch {
+                id: MatchId(2),
+                round: RoundNumber(2),
+                field: 1,
+                team_a: vec![PlayerId(2)],
+                team_b: vec![PlayerId(3)],
+                status: MatchStatus::Completed,
+            },
+            ScheduledMatch {
+                id: MatchId(3),
+                round: RoundNumber(3),
+                field: 1,
+                team_a: vec![PlayerId(2)],
+                team_b: vec![PlayerId(3)],
+                status: MatchStatus::Completed,
+            },
+            ScheduledMatch {
+                id: MatchId(4),
+                round: RoundNumber(4),
+                field: 1,
+                team_a: vec![PlayerId(2)],
+                team_b: vec![PlayerId(3)],
+                status: MatchStatus::Completed,
+            },
+        ]
+        .into_iter()
+        .map(|scheduled_match| (scheduled_match.id, scheduled_match))
+        .collect();
+        let results = vec![
+            points_per_player_result(1, vec![(1, 3), (3, 0)], 1.0),
+            points_per_player_result(2, vec![(2, 1), (3, 0)], 1.0),
+            points_per_player_result(3, vec![(2, 1), (3, 0)], 1.0),
+            points_per_player_result(4, vec![(2, 1), (3, 0)], 1.0),
+        ];
+        let result_refs: Vec<&MatchResult> = results.iter().collect();
+
+        let rankings =
+            engine.compute_ratings(&players, &result_refs, Some(&matches_by_id), &config);
+        let stale_player = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(1))
+            .unwrap();
+        let active_player = rankings
+            .iter()
+            .find(|ranking| ranking.player_id == PlayerId(2))
+            .unwrap();
+
+        assert!(
+            stale_player.uncertainty > active_player.uncertainty,
+            "players who miss completed rounds should get more uncertain: stale={:.3}, active={:.3}",
+            stale_player.uncertainty,
+            active_player.uncertainty
+        );
+        assert!(
+            stale_player.conservative_rating < stale_player.rating,
+            "conservative rating should discount stale players by their uncertainty"
         );
     }
 }

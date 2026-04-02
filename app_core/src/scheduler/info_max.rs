@@ -284,6 +284,7 @@ mod tests {
             .map(|(i, (id, skill))| PlayerRanking {
                 player_id: PlayerId(*id),
                 rating: *skill,
+                conservative_rating: *skill - 1.0,
                 uncertainty: 1.0,
                 rank: i as u32 + 1,
                 rank_range_90: (1, skills.len() as u32),

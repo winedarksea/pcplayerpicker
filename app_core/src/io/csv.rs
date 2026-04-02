@@ -156,6 +156,7 @@ struct RankingCols {
     rank: usize,
     name: usize,
     rating: usize,
+    conservative_rating: Option<usize>,
     uncertainty: usize,
     rank_lo: usize,
     rank_hi: usize,
@@ -171,13 +172,14 @@ impl RankingCols {
             rank: 0,
             name: 1,
             rating: 2,
-            uncertainty: 3,
-            rank_lo: 4,
-            rank_hi: 5,
-            matches_played: 6,
-            total_score: 7,
-            prob_top_k: Some(8),
-            active: Some(9),
+            conservative_rating: Some(3),
+            uncertainty: 4,
+            rank_lo: 5,
+            rank_hi: 6,
+            matches_played: 7,
+            total_score: 8,
+            prob_top_k: Some(9),
+            active: Some(10),
         }
     }
 }
@@ -201,6 +203,10 @@ fn parse_rankings_columns(header: &[String]) -> CsvResult<RankingCols> {
         rank: req(&["rank"], "rank")?,
         name: req(&["name"], "name")?,
         rating: req(&["rating"], "rating")?,
+        conservative_rating: header_index(
+            header,
+            &["conservative_rating", "display_rating", "safe_rating"],
+        ),
         uncertainty: req(&["uncertainty"], "uncertainty")?,
         rank_lo: req(&["rank_lo_90", "rank_lo"], "rank_lo_90")?,
         rank_hi: req(&["rank_hi_90", "rank_hi"], "rank_hi_90")?,
@@ -277,6 +283,7 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
             "rank".to_string(),
             "name".to_string(),
             "rating".to_string(),
+            "conservative_rating".to_string(),
             "uncertainty".to_string(),
             "rank_lo_90".to_string(),
             "rank_hi_90".to_string(),
@@ -301,6 +308,7 @@ pub fn export_rankings(rankings: &[PlayerRanking], players: &[Player]) -> String
                 r.rank.to_string(),
                 name.to_string(),
                 format!("{:.4}", r.rating),
+                format!("{:.4}", r.conservative_rating),
                 format!("{:.4}", r.uncertainty),
                 r.rank_range_90.0.to_string(),
                 r.rank_range_90.1.to_string(),
@@ -769,6 +777,18 @@ pub fn import_rankings(csv: &str) -> CsvResult<Vec<(String, crate::models::Playe
         let uncertainty: f64 = parse_required(row, cols.uncertainty, "uncertainty", row_num)?
             .parse()
             .map_err(|_| CsvError::Format(format!("bad uncertainty at row {row_num}")))?;
+        let conservative_rating: f64 = cols
+            .conservative_rating
+            .and_then(|idx| row.get(idx))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse().map_err(|_| {
+                    CsvError::Format(format!("bad conservative_rating at row {row_num}"))
+                })
+            })
+            .transpose()?
+            .unwrap_or(rating - uncertainty);
         let rank_lo: u32 = parse_required(row, cols.rank_lo, "rank_lo_90", row_num)?
             .parse()
             .map_err(|_| CsvError::Format(format!("bad rank_lo_90 at row {row_num}")))?;
@@ -805,6 +825,7 @@ pub fn import_rankings(csv: &str) -> CsvResult<Vec<(String, crate::models::Playe
             PlayerRanking {
                 player_id: PlayerId(synthetic_id),
                 rating,
+                conservative_rating,
                 uncertainty,
                 rank,
                 rank_range_90: (rank_lo, rank_hi),
@@ -873,6 +894,7 @@ mod tests {
             PlayerRanking {
                 player_id: PlayerId(1),
                 rating: 1.23,
+                conservative_rating: 0.78,
                 uncertainty: 0.45,
                 rank: 1,
                 rank_range_90: (1, 2),
@@ -884,6 +906,7 @@ mod tests {
             PlayerRanking {
                 player_id: PlayerId(2),
                 rating: -0.5,
+                conservative_rating: -1.4,
                 uncertainty: 0.9,
                 rank: 2,
                 rank_range_90: (1, 2),
@@ -901,6 +924,7 @@ mod tests {
         assert_eq!(imported[1].0, "Line\nBreak");
         assert_eq!(imported[0].1.rank, 1);
         assert_eq!(imported[1].1.rank, 2);
+        assert!((imported[0].1.conservative_rating - 0.78).abs() < 1e-6);
     }
 
     #[test]

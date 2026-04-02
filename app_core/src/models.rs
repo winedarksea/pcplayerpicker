@@ -748,6 +748,9 @@ pub struct PlayerRanking {
     pub player_id: PlayerId,
     /// Posterior mean skill (log-scale)
     pub rating: f64,
+    /// Conservative display score: posterior mean minus a fixed uncertainty penalty.
+    #[serde(default)]
+    pub conservative_rating: f64,
     /// Posterior standard deviation
     pub uncertainty: f64,
     /// 1-indexed median rank
