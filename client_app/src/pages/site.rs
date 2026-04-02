@@ -13,11 +13,11 @@ pub fn LandingPage() -> impl IntoView {
     let feature_cards = [
         (
             "Offline-first coach flow",
-            "Run setup, scheduling, scoring, and rankings on one device before you ever go online.",
+            "Run setup, scheduling, scoring, and rankings on one device. No network required.",
         ),
         (
             "Batch scheduling",
-            "Generate rounds in chunks when you need to assign two or three games ahead of time.",
+            "Generate rounds in chunks when you need to assign two or three games ahead of time to keep a steady flow.",
         ),
         (
             "Uncertainty-aware rankings",
@@ -45,13 +45,13 @@ pub fn LandingPage() -> impl IntoView {
                         <div class="max-w-3xl">
                             <div class="inline-flex items-center gap-2 rounded-full border border-teal-400/20 bg-teal-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-teal-200">
                                 <span class="h-2 w-2 rounded-full bg-teal-300"></span>
-                                "PWA + Static Site"
+                                "Rust Powered: PWA + Static Site"
                             </div>
                             <h1 class="mt-6 max-w-2xl text-5xl font-black tracking-[-0.04em] text-white sm:text-6xl">
-                                "Schedule sharper sessions. Rank players, with uncertainty shown."
+                                "Schedule better matches. Rank players, with uncertainty shown."
                             </h1>
                             <p class="mt-5 max-w-2xl text-lg leading-8 text-slate-300">
-                                "PCPlayerPicker is built for coaches running repeat small-sided games. It keeps the core loop on the device, updates rankings from player goal totals, and keeps the public site lightweight."
+                                "PCPlayerPicker is built for coaches running repeat small-sided games to evaluate players. It can also be used for quick, flexible tournaments."
                             </p>
                             <div class="mt-8 flex flex-col gap-3 sm:flex-row">
                                 <A
@@ -427,7 +427,7 @@ fn SiteFooter() -> impl IntoView {
             <div class="mx-auto flex max-w-6xl flex-col gap-5 px-5 py-8 text-sm text-slate-400 sm:px-8 md:flex-row md:items-center md:justify-between">
                 <div>
                     <p class="font-semibold text-slate-200">"PCPlayerPicker"</p>
-                    <p class="mt-1">"Offline-first scheduling and ranking for recurring team sessions."</p>
+                    <p class="mt-1">"Offline-first scheduling and ranking for matches, tryouts, and tournaments."</p>
                 </div>
                 <div class="flex flex-wrap items-center gap-4">
                     <A href="/" attr:class="transition hover:text-white">"Home"</A>
