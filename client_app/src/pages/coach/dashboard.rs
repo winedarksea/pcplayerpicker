@@ -57,6 +57,31 @@ fn compare_player_rankings_for_dashboard(
         .then_with(|| left.player_id.0.cmp(&right.player_id.0))
 }
 
+fn collect_players_sorted_for_ranking_input(
+    players_by_id: &HashMap<PlayerId, app_core::models::Player>,
+) -> Vec<app_core::models::Player> {
+    let mut players: Vec<_> = players_by_id.values().cloned().collect();
+    players.sort_by_key(|player| player.id.0);
+    players
+}
+
+fn collect_completed_results_sorted_for_ranking_input<'a>(
+    results_by_match_id: &'a HashMap<MatchId, MatchResult>,
+    matches_by_id: &HashMap<MatchId, app_core::models::ScheduledMatch>,
+) -> Vec<&'a MatchResult> {
+    let mut completed_results: Vec<_> = results_by_match_id
+        .values()
+        .filter(|result| {
+            matches_by_id
+                .get(&result.match_id)
+                .map(|scheduled_match| scheduled_match.status == MatchStatus::Completed)
+                .unwrap_or(false)
+        })
+        .collect();
+    completed_results.sort_by_key(|result| result.match_id.0);
+    completed_results
+}
+
 fn select_input_text_on_focus(ev: leptos::ev::FocusEvent) {
     let Some(target) = ev.target() else {
         return;
@@ -1059,23 +1084,14 @@ pub fn AnalysisTab() -> impl IntoView {
                     Some(c) => c,
                     None => return,
                 };
-                let players: Vec<_> = manager.state.players.values().cloned().collect();
+                let players = collect_players_sorted_for_ranking_input(&manager.state.players);
                 if players.is_empty() {
                     return;
                 }
-                let results: Vec<_> = manager
-                    .state
-                    .results
-                    .values()
-                    .filter(|r| {
-                        manager
-                            .state
-                            .matches
-                            .get(&r.match_id)
-                            .map(|m| m.status == MatchStatus::Completed)
-                            .unwrap_or(false)
-                    })
-                    .collect();
+                let results = collect_completed_results_sorted_for_ranking_input(
+                    &manager.state.results,
+                    &manager.state.matches,
+                );
                 if results.is_empty() {
                     return;
                 }
