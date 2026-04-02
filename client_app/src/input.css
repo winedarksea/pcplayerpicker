@@ -31,7 +31,8 @@
   }
 
   .score-entry-mode-info-icon {
-    @apply flex h-5 w-5 items-center justify-center rounded-full border border-current/30 text-[10px] font-bold opacity-80;
+    @apply flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold opacity-80;
+    border-color: color-mix(in srgb, currentColor 30%, transparent);
   }
 
   .score-entry-mode-info-tooltip {
