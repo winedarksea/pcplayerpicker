@@ -2366,8 +2366,6 @@ fn RankLane(
             let is_active = r.is_active;
             let bar_color = if !is_active {
                 "#4b5563"
-            } else if r.rank <= 3 {
-                "#ca8a04"
             } else {
                 "#2563eb"
             };
