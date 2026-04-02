@@ -19,7 +19,7 @@ use crate::sync::{
 use app_core::events::{materialize, Event};
 use app_core::io::csv::{self, import_rankings};
 use app_core::models::{
-    MatchId, MatchOutcome, MatchResult, MatchStatus, PlayerId, Role, ScoreEntryMode,
+    MatchId, MatchOutcome, MatchResult, MatchStatus, PlayerId, Role, RoundNumber, ScoreEntryMode,
 };
 use app_core::ranking::goal_model::GoalModelEngine;
 use app_core::ranking::RankingEngine;
@@ -593,15 +593,18 @@ pub fn MatchesTab() -> impl IntoView {
 // RESULTS TAB
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Read-only summary card for a completed match result.
+/// Completed match result card with inline edit capability.
 #[component]
 fn MatchResultSummaryCard(
     field: u8,
     round: u32,
+    match_id: MatchId,
     team_a: Vec<PlayerId>,
     team_b: Vec<PlayerId>,
     player_names: HashMap<PlayerId, String>,
     result: MatchResult,
+    score_entry_mode: ScoreEntryMode,
+    on_correct: impl Fn(MatchResult) + 'static + Clone + Send + Sync,
 ) -> impl IntoView {
     let scheduled_match = app_core::models::ScheduledMatch {
         id: result.match_id,
@@ -629,54 +632,111 @@ fn MatchResultSummaryCard(
     let show_duration = (result.duration_multiplier - 1.0).abs() > 0.01;
     let duration_pct = (result.duration_multiplier * 100.0).round() as u32;
 
-    view! {
-        <div class="bg-gray-900 border border-gray-700/50 rounded-xl overflow-hidden">
-            <div class="px-4 pt-3 pb-2 border-b border-gray-700/30 flex items-center justify-between">
-                <span class="text-sm font-semibold text-white">
-                    "Field "{field}" · Rd "{round}
-                </span>
-                <span class="text-xs font-bold text-gray-200">
-                    {scoreline}
-                </span>
-            </div>
-            <div class="px-4 py-3 space-y-1.5">
-                {all_ids.iter().map(|&pid| {
-                    let name = player_names.get(&pid).cloned()
-                        .unwrap_or_else(|| format!("Player {}", pid.0));
-                    let on_team_a = team_a.contains(&pid);
-                    let score_label = match result.score_entry_mode() {
-                        ScoreEntryMode::PointsPerPlayer => result
-                            .individual_points_for_player(&pid)
-                            .map(|points| points.to_string())
-                            .unwrap_or_else(|| "DNP".to_string()),
-                        _ => {
-                            if result.player_played(&pid) {
-                                "Played".to_string()
-                            } else {
-                                "DNP".to_string()
-                            }
-                        }
-                    };
-                    view! {
-                        <div class="flex items-center gap-2">
-                            <span class=move || format!(
-                                "w-2 h-2 rounded-full shrink-0 {}",
-                                if on_team_a { "bg-blue-400" } else { "bg-orange-400" }
-                            )/>
-                            <span class="flex-1 text-sm text-white truncate">{name}</span>
-                            <span class="text-sm text-gray-400 font-medium tabular-nums">
-                                {score_label}
-                            </span>
-                        </div>
+    // Pre-compute per-player display rows so the summary closure doesn't need to
+    // borrow result/player_names/team_a after they're moved into edit clones.
+    let player_rows: Vec<(bool, String, String)> = all_ids
+        .iter()
+        .map(|&pid| {
+            let on_team_a = team_a.contains(&pid);
+            let name = player_names
+                .get(&pid)
+                .cloned()
+                .unwrap_or_else(|| format!("Player {}", pid.0));
+            let score_label = match result.score_entry_mode() {
+                ScoreEntryMode::PointsPerPlayer => result
+                    .individual_points_for_player(&pid)
+                    .map(|points| points.to_string())
+                    .unwrap_or_else(|| "DNP".to_string()),
+                _ => {
+                    if result.player_played(&pid) {
+                        "Played".to_string()
+                    } else {
+                        "DNP".to_string()
                     }
-                }).collect_view()}
-            </div>
-            {show_duration.then(|| view! {
-                <div class="px-4 pb-2 text-xs text-gray-500">
-                    "Duration: "{duration_pct}"%"
-                </div>
-            })}
-        </div>
+                }
+            };
+            (on_team_a, name, score_label)
+        })
+        .collect();
+
+    let editing = RwSignal::new(false);
+
+    // Clones used by the edit form.
+    let team_a_edit = team_a.clone();
+    let team_b_edit = team_b.clone();
+    let player_names_edit = player_names.clone();
+    let result_edit = result.clone();
+
+    view! {
+        {move || {
+            if editing.get() {
+                let on_correct = on_correct.clone();
+                view! {
+                    <SharedScoreEntryCard
+                        match_id=match_id
+                        field=field
+                        round=round
+                        team_a=team_a_edit.clone()
+                        team_b=team_b_edit.clone()
+                        player_names=player_names_edit.clone()
+                        score_entry_mode=score_entry_mode
+                        existing_result=Some(result_edit.clone())
+                        entered_by=Role::Coach
+                        show_duration_picker=true
+                        auto_save=false
+                        submit_label="Save Correction"
+                        on_submit=move |r: MatchResult| {
+                            on_correct(r);
+                            editing.set(false);
+                        }
+                    />
+                }.into_any()
+            } else {
+                let scoreline = scoreline.clone();
+                view! {
+                    <div class="bg-gray-900 border border-gray-700/50 rounded-xl overflow-hidden">
+                        <div class="px-4 pt-3 pb-2 border-b border-gray-700/30 flex items-center justify-between">
+                            <span class="text-sm font-semibold text-white">
+                                "Field "{field}" · Rd "{round}
+                            </span>
+                            <div class="flex items-center gap-3">
+                                <span class="text-xs font-bold text-gray-200">{scoreline}</span>
+                                <button
+                                    class="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                                    on:click=move |_| editing.set(true)
+                                >
+                                    "Edit"
+                                </button>
+                            </div>
+                        </div>
+                        <div class="px-4 py-3 space-y-1.5">
+                            {player_rows.iter().map(|(on_team_a, name, score_label)| {
+                                let on_team_a = *on_team_a;
+                                let name = name.clone();
+                                let score_label = score_label.clone();
+                                view! {
+                                    <div class="flex items-center gap-2">
+                                        <span class=move || format!(
+                                            "w-2 h-2 rounded-full shrink-0 {}",
+                                            if on_team_a { "bg-blue-400" } else { "bg-orange-400" }
+                                        )/>
+                                        <span class="flex-1 text-sm text-white truncate">{name}</span>
+                                        <span class="text-sm text-gray-400 font-medium tabular-nums">
+                                            {score_label}
+                                        </span>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                        {show_duration.then(|| view! {
+                            <div class="px-4 pb-2 text-xs text-gray-500">
+                                "Duration: "{duration_pct}"%"
+                            </div>
+                        })}
+                    </div>
+                }.into_any()
+            }
+        }}
     }
 }
 
@@ -733,6 +793,61 @@ struct CurrentRoundScoreEntrySectionDefinition {
 pub fn ResultsTab() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext missing");
     let show_history = RwSignal::new(false);
+
+    let on_correct_submit = {
+        let ctx = ctx.clone();
+        move |result: MatchResult| {
+            ctx.session.update(|opt| {
+                if let Some(manager) = opt {
+                    manager.correct_score(result);
+                }
+            });
+            ctx.session.with(|s| {
+                if let Some(m) = s {
+                    save_session(m);
+                }
+            });
+        }
+    };
+
+    let on_lock_round = {
+        let ctx = ctx.clone();
+        move |round: u32| {
+            ctx.session.update(|opt| {
+                if let Some(manager) = opt {
+                    manager.lock_round(RoundNumber(round));
+                }
+            });
+            ctx.session.with(|s| {
+                if let Some(m) = s {
+                    save_session(m);
+                }
+            });
+        }
+    };
+
+    let all_current_round_scored = {
+        let ctx = ctx.clone();
+        Memo::new(move |_| {
+            ctx.session.with(|session| -> Option<u32> {
+                let manager = session.as_ref()?;
+                let round = manager.state.current_round;
+                let non_voided: Vec<_> = manager
+                    .state
+                    .matches
+                    .values()
+                    .filter(|m| m.round == round && m.status != MatchStatus::Voided)
+                    .collect();
+                if non_voided.is_empty() {
+                    return None;
+                }
+                let all_scored = non_voided
+                    .iter()
+                    .all(|m| manager.state.results.contains_key(&m.id));
+                all_scored.then_some(round.0)
+            })
+        })
+    };
 
     let on_score_submit = {
         let ctx = ctx.clone();
@@ -878,6 +993,17 @@ pub fn ResultsTab() -> impl IntoView {
                                     />
                                 }
                             }).collect_view()}
+                            {move || all_current_round_scored.get().map(|rnd| view! {
+                                <div class="pt-2">
+                                    <button
+                                        class="w-full py-3 bg-blue-700 hover:bg-blue-600 text-white \
+                                               font-semibold rounded-xl transition-colors min-h-[48px]"
+                                        on:click=move |_| on_lock_round(rnd)
+                                    >
+                                        "Complete Round "{rnd}" →"
+                                    </button>
+                                </div>
+                            })}
                         </div>
                     }.into_any()
                 }
@@ -902,6 +1028,13 @@ pub fn ResultsTab() -> impl IntoView {
                     .iter()
                     .map(|(id, p)| (*id, p.name.clone()))
                     .collect();
+
+                let score_entry_mode = manager
+                    .state
+                    .config
+                    .as_ref()
+                    .map(|c| c.score_entry_mode)
+                    .unwrap_or(ScoreEntryMode::PointsPerPlayer);
 
                 let mut past: Vec<_> = manager
                     .state
@@ -946,12 +1079,15 @@ pub fn ResultsTab() -> impl IntoView {
                                     let pnames = player_names.clone();
                                     Some(view! {
                                         <MatchResultSummaryCard
+                                            match_id=m.id
                                             field=m.field
                                             round=m.round.0
                                             team_a=m.team_a.clone()
                                             team_b=m.team_b.clone()
                                             player_names=pnames
                                             result=result
+                                            score_entry_mode=score_entry_mode
+                                            on_correct=on_correct_submit
                                         />
                                     })
                                 }).collect_view();

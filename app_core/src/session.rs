@@ -328,6 +328,12 @@ impl SessionManager {
         self.state = crate::events::materialize(&self.log);
     }
 
+    pub fn lock_round(&mut self, round: RoundNumber) {
+        self.log
+            .append(Event::RoundLocked { round }, Role::Coach);
+        self.state = crate::events::materialize(&self.log);
+    }
+
     pub fn reseed(&mut self) -> u32 {
         let new_count = self.rng.reseed();
         self.log

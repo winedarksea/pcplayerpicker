@@ -50,6 +50,9 @@ pub enum Event {
     MatchVoided {
         match_id: MatchId,
     },
+    RoundLocked {
+        round: RoundNumber,
+    },
     SessionReseeded {
         new_count: u32,
     },
@@ -122,17 +125,23 @@ impl EventLog {
 /// Coach-entered scores override assistant-entered scores for the same match.
 pub fn materialize(log: &EventLog) -> SessionState {
     let mut state = SessionState::default();
+    let mut locked_rounds: std::collections::HashSet<RoundNumber> =
+        std::collections::HashSet::new();
 
     for envelope in log.all() {
+        if let Event::RoundLocked { round } = &envelope.payload {
+            locked_rounds.insert(*round);
+        }
         apply_event(&mut state, &envelope.payload, &envelope.entered_by);
     }
 
-    state.current_round = derive_current_round(&state.matches);
+    state.current_round = derive_current_round(&state.matches, &locked_rounds);
     state
 }
 
 fn derive_current_round(
     matches: &std::collections::HashMap<MatchId, ScheduledMatch>,
+    locked_rounds: &std::collections::HashSet<RoundNumber>,
 ) -> RoundNumber {
     if matches.is_empty() {
         return RoundNumber(1);
@@ -143,14 +152,25 @@ fn derive_current_round(
     rounds.dedup();
 
     for round in &rounds {
-        let pending = matches.values().any(|m| {
-            m.round == *round
-                && m.status != MatchStatus::Completed
-                && m.status != MatchStatus::Voided
+        let all_done = matches.values().filter(|m| m.round == *round).all(|m| {
+            m.status == MatchStatus::Completed || m.status == MatchStatus::Voided
         });
-        if pending {
+
+        if !all_done {
             return *round;
         }
+
+        // Round is fully scored. Auto-advance only if explicitly locked or a later
+        // round is already scheduled (backwards-compat for CSV imports and multi-round
+        // sessions where the next round was generated before scores were entered).
+        let has_later_round = matches.values().any(|m| m.round.0 > round.0);
+        if locked_rounds.contains(round) || has_later_round {
+            continue;
+        }
+
+        // All scored, no later round scheduled, not yet locked —
+        // hold current_round here until the coach explicitly locks.
+        return *round;
     }
 
     RoundNumber(rounds.last().map(|r| r.0).unwrap_or(0) + 1)
@@ -246,6 +266,10 @@ fn apply_event(state: &mut SessionState, event: &Event, entered_by: &Role) {
                 m.status = MatchStatus::Voided;
             }
             // Result is retained in the log but excluded from ranking by checking match status
+        }
+
+        Event::RoundLocked { .. } => {
+            // Round advancement is handled by derive_current_round via locked_rounds.
         }
 
         Event::SessionReseeded { new_count } => {
@@ -518,6 +542,18 @@ mod tests {
             Role::Coach,
         );
 
+        // Without an explicit lock, current_round stays at the completed round
+        // until the coach acknowledges it.
+        let state = materialize(&log);
+        assert_eq!(state.current_round, RoundNumber(1));
+
+        // After locking, current_round advances to the next unscheduled round.
+        log.append(
+            Event::RoundLocked {
+                round: RoundNumber(1),
+            },
+            Role::Coach,
+        );
         let state = materialize(&log);
         assert_eq!(state.current_round, RoundNumber(2));
     }
