@@ -26,6 +26,23 @@
     color: white;
   }
 
+  .score-entry-mode-info-anchor {
+    @apply inline-flex items-center justify-center;
+  }
+
+  .score-entry-mode-info-icon {
+    @apply flex h-5 w-5 items-center justify-center rounded-full border border-current/30 text-[10px] font-bold opacity-80;
+  }
+
+  .score-entry-mode-info-tooltip {
+    @apply pointer-events-none absolute right-0 top-full z-10 mt-2 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-medium text-gray-200 shadow-xl opacity-0 transition-opacity duration-150;
+  }
+
+  .score-entry-mode-info-anchor:hover .score-entry-mode-info-tooltip,
+  .score-entry-mode-info-anchor:focus-visible .score-entry-mode-info-tooltip {
+    @apply opacity-100;
+  }
+
   /* Marketing site pages: provide a clear non-dark palette when .dark is absent. */
   html:not(.dark) .site-theme {
     @apply bg-slate-50 text-slate-900;

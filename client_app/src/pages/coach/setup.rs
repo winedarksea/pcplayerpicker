@@ -9,6 +9,20 @@ use leptos_router::hooks::use_navigate;
 
 const TEAM_SIZES: &[u8] = &[1, 2, 3, 4, 5, 7, 11];
 
+fn score_entry_mode_help_text(mode: ScoreEntryMode) -> &'static str {
+    match mode {
+        ScoreEntryMode::PointsPerPlayer => {
+            "Enter points for each player individually. Best when teammates can score different amounts."
+        }
+        ScoreEntryMode::PointsPerTeam => {
+            "Enter one total for each team. Best when the match is decided by the team score."
+        }
+        ScoreEntryMode::WinDrawLose => {
+            "Record only the outcome: Team A win, draw, or Team B win. Best when exact points do not matter."
+        }
+    }
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 #[component]
@@ -200,10 +214,11 @@ pub fn SetupPage() -> impl IntoView {
                         {[ScoreEntryMode::PointsPerPlayer, ScoreEntryMode::PointsPerTeam, ScoreEntryMode::WinDrawLose]
                             .into_iter()
                             .map(|mode| {
+                                let help_text = score_entry_mode_help_text(mode);
                                 view! {
                                     <button
                                         class=move || {
-                                            let base = "px-4 py-3 rounded-xl border font-semibold \
+                                            let base = "relative px-4 py-3 pr-10 rounded-xl border font-semibold \
                                                         text-sm transition-colors min-h-[48px]";
                                             if score_entry_mode.get() == mode {
                                                 format!("{base} bg-blue-600 border-blue-500 text-white")
@@ -214,7 +229,21 @@ pub fn SetupPage() -> impl IntoView {
                                         }
                                         on:click=move |_| score_entry_mode.set(mode)
                                     >
-                                        {mode.to_string()}
+                                        <span>{mode.to_string()}</span>
+                                        <span
+                                            class="score-entry-mode-info-anchor absolute top-2.5 right-2.5"
+                                            tabindex="0"
+                                            aria-label=help_text
+                                            title=help_text
+                                        >
+                                            <span class="score-entry-mode-info-icon">"i"</span>
+                                            <span
+                                                class="score-entry-mode-info-tooltip w-56 text-left"
+                                                role="tooltip"
+                                            >
+                                                {help_text}
+                                            </span>
+                                        </span>
                                     </button>
                                 }
                             }).collect_view()}
