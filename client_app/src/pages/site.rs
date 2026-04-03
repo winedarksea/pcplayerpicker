@@ -69,7 +69,7 @@ pub fn LandingPage() -> impl IntoView {
                             </div>
                             <div class="mt-8 grid gap-3 sm:grid-cols-3">
                                 <HeroStat value="No Signup" label="Open a session and start playing."/>
-                                <HeroStat value="Rank intervals" label="Uncertainty shown, not just a ladder"/>
+                                <HeroStat value="Rank Intervals" label="Uncertainty shown, not just a ladder"/>
                                 <HeroStat value="Any Sport" label="Soccer, basketball, pickleball, and more"/>
                             </div>
                         </div>
@@ -317,7 +317,7 @@ pub fn FaqPage() -> impl IntoView {
 
     let history_paragraphs = [
         "PC Player Picker started as the idea of Mark Catlin back in 1990, who as a soccer coach wrote a number of books (The Art of Soccer, Good N' Fun Soccer, and 'Understanding Soccer' under the pseudonym Kram Niltac). He commissioned a simple MS-DOS program from a local developer to create schedules and rank players, Player Picker for PC. Simpler than the current version, the basic idea was the same, to use 2 on 2 soccer as a more focused way to test players and get a quantitative basis for skills evaluation.",
-        "Since no one uses floppy disks anymore, I wrote this updated version as a birthday present for Mark Catlin (my father). The goal remains the same now, to be an effective yet simple tool for evaluating players, now powered by Bayesian statistics and the Rust programming language. This active learning approach (adjusting schedules based on results) also makes it useful for running tournaments, the idea being a pickleball league can do an informal tournament, just playing as many games as they want in an evening without a full bracket, and the skills pairings should mean most matches are closer, more exciting matches.",
+        "Since no one uses floppy disks anymore, I wrote this updated version as a birthday present for Mark Catlin (my father). The goal remains the same now, to be an effective yet simple tool for evaluating players, powered by Bayesian statistics and the Rust programming language. This active learning approach (adjusting schedules based on results) also makes it useful for running tournaments, the idea being a pickleball league can do an informal tournament, just playing as many games as they want in an evening without a full bracket, and the skills pairings should mean most matches are closer, more exciting matches.",
     ];
 
     view! {
