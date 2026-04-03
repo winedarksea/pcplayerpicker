@@ -394,9 +394,7 @@ fn SiteNav() -> impl IntoView {
         <header class="sticky top-0 z-40 border-b border-white/10 bg-slate-950/85 dark:bg-slate-950/85 backdrop-blur">
             <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
                 <A href="/" attr:class="flex items-center gap-3">
-                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-300 to-amber-300 text-sm font-black text-slate-950">
-                        "PC"
-                    </div>
+                    <img src="/icon.svg" alt="PC Player Picker" class="h-11 w-11 rounded-2xl"/>
                     <div>
                         <p class="text-base font-bold tracking-[0.02em] text-white">"PC Player Picker"</p>
                         <p class="text-xs uppercase tracking-[0.22em] text-slate-500">"Active Learning Sessions"</p>

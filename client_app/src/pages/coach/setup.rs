@@ -139,7 +139,9 @@ pub fn SetupPage() -> impl IntoView {
                           min-h-[44px] flex items-center">
                     "←"
                 </a>
-                <h1 class="text-xl font-bold">"New Session"</h1>
+                <a href="/" class="text-xl font-bold hover:text-gray-300 transition-colors">
+                    "New Session"
+                </a>
             </div>
 
             <div class="px-4 pb-16 space-y-8 max-w-lg mx-auto">
