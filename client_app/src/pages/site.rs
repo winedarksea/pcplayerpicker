@@ -68,9 +68,9 @@ pub fn LandingPage() -> impl IntoView {
                                 </A>
                             </div>
                             <div class="mt-8 grid gap-3 sm:grid-cols-3">
-                                <HeroStat value="100% Offline" label="Coach mode works without network"/>
-                                <HeroStat value="Goal totals" label="Per-player input, not just wins"/>
-                                <HeroStat value="Installable" label="Add to home screen on any device"/>
+                                <HeroStat value="No Signup" label="Open a session and start playing."/>
+                                <HeroStat value="Rank intervals" label="Uncertainty shown, not just a ladder"/>
+                                <HeroStat value="Any Sport" label="Soccer, basketball, pickleball, and more"/>
                             </div>
                         </div>
 
